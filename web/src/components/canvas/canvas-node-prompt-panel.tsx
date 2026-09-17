@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, Maximize2, Square } from "lucide-react";
-import { Button, Modal, Tooltip } from "antd";
+import { Button, Input, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, resolveModelRequestConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { validateArkVideoSettings } from "@/lib/video-model-config";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
@@ -47,6 +48,9 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const [prompt, setPrompt] = useState(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
     const [expanded, setExpanded] = useState(false);
+    const arkVideo = mode === "video" && resolveModelRequestConfig(config, config.model).apiFormat === "ark";
+    const canSubmit = Boolean(prompt.trim() || (arkVideo && connectedNodes.some((item) => item.metadata?.content || item.metadata?.videoReferenceUrl)));
+    const videoSettingsError = mode === "video" ? validateArkVideoSettings(config) : "";
 
     // Restore prompts only when switching nodes; preserve the current input after generation on the same node.
     useEffect(() => {
@@ -62,7 +66,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || isRunning) return;
+        if (!canSubmit || isRunning || videoSettingsError) return;
         onGenerate(node.id, mode, text);
     };
 
@@ -80,6 +84,10 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
             onWheel={(event) => event.stopPropagation()}
         >
             <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} />
+            {node.type === CanvasNodeType.Video && <label className="mb-2 block text-xs" style={{ color: theme.node.muted }}>
+                Ark 参考视频来源（供其他节点引用）
+                <Input className="mt-1" value={node.metadata?.videoReferenceUrl || ""} placeholder="公网 HTTP(S) / asset://；不影响本地播放" onChange={(event) => onConfigChange(node.id, { videoReferenceUrl: event.target.value.trim() })} />
+            </label>}
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
@@ -129,7 +137,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
-                    disabled={!isRunning && !prompt.trim()}
+                    disabled={!isRunning && (!canSubmit || Boolean(videoSettingsError))}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
                     aria-label={t(isRunning ? "canvas.promptPanel.stopGeneration" : "canvas.promptPanel.generate")}
                 >

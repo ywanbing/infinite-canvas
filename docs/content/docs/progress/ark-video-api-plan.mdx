@@ -1,0 +1,246 @@
+---
+title: Ark 视频 API 接入计划
+description: Seedance 视频任务接入与模型能力驱动的参数选择方案
+---
+
+# Ark 视频 API 接入计划
+
+当前状态：已实现，等待用户真实接口和浏览器验收。行为测试已覆盖原生请求、参数面板、渠道持久化与画布素材；未执行构建或类型检查。
+
+## 目标与接入方式
+
+通过现有 Ark 渠道直接调用视频 HTTP API，复用浏览器请求、本地代理、视频生成页面、画布节点和本地任务记录。模型能力与默认配置写在代码中，参数面板和请求校验读取同一份配置。
+
+已实现创建任务、查询状态、取得结果和恢复查询的完整流程；参数选择随当前模型和生成模式变化。沿用现有 Axios，不新增服务端或 SDK 依赖。
+
+依据文档：
+
+- [视频生成教程](https://docs.volcengine.com/docs/82379/2298881?lang=zh)
+- [创建视频生成任务](https://docs.volcengine.com/docs/82379/1520757?lang=zh)
+- [查询视频生成任务](https://docs.volcengine.com/docs/82379/1521309?lang=zh)
+- [Seedance 2.5 教程](https://docs.volcengine.com/docs/82379/2607688?lang=zh)
+- [Seedance 2.0 系列教程](https://docs.volcengine.com/docs/82379/2291680?lang=zh)
+
+本期交付生成与参考素材模式，以及 2.5 的视频编辑、延长参数约束。联网搜索、样片转正式视频、离线推理、Webhook、MOV 输出、连续视频编排和远端任务删除作为后续独立功能，不混入本次基础接入。
+
+## 接入前需要解决的问题
+
+- `web/src/services/api/video.ts` 在 Ark 无自定义脚本时直接报“不支持”；现有 OpenAI 分支使用 `/videos` 和 FormData，与 Ark 协议不同。
+- `VideoGenerationTask.provider` 和画布的 `videoTaskProvider` 缺少 `ark`；`web/src/pages/canvas/project.tsx` 保存、恢复时将非 Gemini 任务归为 OpenAI。
+- `video-settings-panel.tsx` 固定提供 480p / 720p / 1080p 和 4–30 秒，允许任意 W/H；不能表达各 Seedance 模型的真实参数范围。
+- `clampVideoSeconds()` 会把 `-1` 改成 4；`parseVideoResolution()` 无法保留 `4k`；Ark 路径不能继续无条件使用这些通用转换。
+- 渠道 `guessCapability()` 尚未识别 `seedance`；模型可能被默认标记为文本。
+- 现有视频页面只提交图片参考；画布已能传入视频、音频参考，但本地视频通常只有浏览器 `blob:` 地址。
+
+
+### Ark 渠道接入方式
+
+只有 Ark 渠道保存 `arkAccessMode`：标准 API `api`、Agent Plan `agent-plan`。默认 Base URL 分别为 `https://ark.cn-beijing.volces.com/api/v3`、`https://ark.cn-beijing.volces.com/api/plan/v3`。切换方式更新默认地址，保留自定义地址和已配模型。
+
+接入方式区域不再提供独立模型目录。所有模型统一在渠道模型列表中获取或手动配置，Agent Plan 不根据接入方式过滤视觉模型。已知 Agent Plan Seedance 别名（例如 `doubao-seedance-2.5`、`doubao-seedance-2.0-fast`）与标准 API Model ID 共用对应能力配置，请求始终发送渠道中配置的原始模型名。已从 Agent Plan 下线的 Seedance 1.5 Pro 会在提交前明确拒绝；标准 API 仍按其独立 Model ID 解析。Agent Plan 视频路由依据[视觉模型接入文档](https://docs.volcengine.com/docs/82379/2375486)使用 `/api/plan/v3/contents/generations/tasks`。
+
+型号能力在 `web/src/lib/video-model-config.ts` 硬编码，接入地址在 `web/src/lib/ark-channel-config.ts`。为减少重复状态，2.5 的参考、编辑、延长直接使用 `videoMode=reference/edit/extend`，不再单独增加 `videoReferenceTask`。面板展示分辨率和比例，不推算可能失真的 W/H。默认值由“使用模型默认值”显式应用，切换型号不覆盖用户参数。
+
+## 模型能力表
+
+配置采用官方 Model ID，版本匹配使用明确的模型前缀；先匹配 fast / mini 等具体型号，避免被通用 2.0 或 pro 规则覆盖。
+
+| 模型 | 官方 Model ID | 输出分辨率 | 整数秒范围 | 首尾帧 | 全模态参考 | 生成声音 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Seedance 2.5 | `doubao-seedance-2-5-260628` | 480p / 720p / 1080p | 4–30，支持智能时长 | 支持 | 支持，可仅参考音频 | 支持 |
+| Seedance 2.0 | `doubao-seedance-2-0-260128` | 480p / 720p / 1080p / 4k | 4–15，支持智能时长 | 支持 | 支持，音频需搭配图片或视频 | 支持 |
+| Seedance 2.0 fast | `doubao-seedance-2-0-fast-260128` | 480p / 720p | 4–15，支持智能时长 | 支持 | 同 2.0 | 支持 |
+| Seedance 2.0 mini | `doubao-seedance-2-0-mini-260615` | 480p / 720p | 4–15，支持智能时长 | 支持 | 同 2.0 | 支持 |
+| Seedance 1.5 pro | `doubao-seedance-1-5-pro-251215` | 480p / 720p / 1080p | 4–12，支持智能时长 | 支持 | 不支持 | 支持 |
+| Seedance 1.0 pro | `doubao-seedance-1-0-pro-250528` | 480p / 720p / 1080p | 2–12 | 支持 | 不支持 | 不支持 |
+| Seedance 1.0 pro fast | `doubao-seedance-1-0-pro-fast-251015` | 480p / 720p / 1080p | 2–12 | 不支持 | 不支持 | 不支持 |
+
+所有上述型号均支持文生视频和单首帧图生视频。智能时长在 API 中为 `duration: -1`。
+
+输出比例为 `16:9`、`4:3`、`1:1`、`3:4`、`9:16`、`21:9`，按场景额外提供 `adaptive`；不提供通用面板中的 `3:2`。
+
+场景约束：
+
+- 首帧、首尾帧、全模态参考三类输入互斥；不能混用 `first_frame` / `last_frame` 与参考素材角色。
+- 2.5 首帧、首尾帧模式仅支持 `ratio: adaptive`。
+- 2.5 全模态参考增加“参考生成 / 视频编辑 / 视频延长”选择，映射 `omni_reference_task_type: reference / edit / extend`；编辑、延长必须有参考视频，且比例只能为 `adaptive`。编辑还必须使用 `duration: -1`，待编辑视频为 4–30 秒。
+- 2.5 全模态子任务默认选择“参考生成”，显式发送 `omni_reference_task_type: reference`；用户选择编辑、延长时再切换对应规则，避免依赖接口自动猜测子任务。
+- 2.0 系列的视频编辑、延长通过参考视频和提示词表达，不发送仅 2.5 支持的 `omni_reference_task_type`。
+- 1.0 系列文生视频不支持 `adaptive`，图生视频支持；1.0 pro fast 不能接收尾帧。
+- 无声音生成能力的模型隐藏声音开关，请求不发送 `generate_audio`。
+
+## 模型配置与动态选择
+
+新增 `web/src/lib/video-model-config.ts`，采用与图片模型配置相近的简单注册表。模型枚举、选项、默认值、场景约束及素材限制集中维护，不在组件中散落按模型名称判断的分支。
+
+实现入口：
+
+- `arkVideoModels`：标准型号能力表；渠道模型由用户配置，不按接入方式过滤。
+- `resolveArkVideoModel(name, accessMode)` / `getArkVideoCapabilities(config)`：读取当前模型能力。
+- `validateArkVideoSettings(config)`：面板和请求层共用的模式、分辨率、比例、时长校验。
+- `createArkVideoTask` / `pollArkVideoTask`：素材校验、原生 JSON 创建及查询。
+
+配置没有覆盖的未知型号不猜测为某个 Seedance 版本；自定义脚本继续优先。
+
+模型选择交互：
+
+1. 渠道编辑中提供注册表中的 Seedance 型号供选择添加，并标记为视频能力；获取模型列表时也能自动识别 `seedance`。
+2. 生成面板继续只显示用户渠道中已配置的视频模型，不能把内置型号列表等同于账号已开通权限。
+3. 选中模型后刷新可用模式、分辨率、比例、时长和素材入口；无内置适配且无脚本的 Ark 模型显示明确提示。
+4. 切换模型时保留已有输入；无效值显示中文说明，生成前要求用户重新选择。不能静默降分辨率、截断时长或丢弃参考素材。
+5. 画布节点、配置节点和视频页面均依据当前实际选中的视频模型解析配置，避免误用全局图片或文本模型。
+
+Ark 面板使用“分辨率 + 比例”，实际像素尺寸以生成结果为准。`adaptive` 不承诺固定尺寸，也不把分辨率档位当作短边像素计算。
+
+## 默认值、边界与失败行为
+
+这些属于计划中的行为变更，实施时以用户确认的本计划为依据：
+
+| 环节 | 建议默认值与边界 | 不满足时的行为 |
+| --- | --- | --- |
+| 新建 Ark 参数 | 2.5 / 2.0 系列 / 1.5 pro 默认 720p；1.0 系列默认 1080p，采用文档默认档位 | 已存在且有效的用户设置继续使用 |
+| 时长 | 2.5 新建参数默认智能 `-1`；其他型号沿用项目当前默认 6 秒；可选范围见模型表 | 明确提示范围，不沿用通用 4–30 秒截断逻辑 |
+| 比例 | 1.0 文生视频默认 16:9；其余场景按文档使用 adaptive；2.5 首尾帧、编辑、延长固定 adaptive | 场景切换后显示约束，阻止提交不适用的固定比例 |
+| 水印与声音 | 水印默认 false；支持声音的型号默认 generate_audio=true | 不支持声音的型号不传该字段 |
+| 2.0 系列全模态输入 | 最多 9 图、3 视频、3 音频；不能仅输入音频；视频/音频各自单段 2–15 秒、各自总时长至多 15 秒 | 本地可判定的违规在提交前报错，不丢弃超出素材 |
+| 2.5 全模态输入 | 最多 30 图、10 视频、10 音频；视频/音频各自单段 2–30 秒、各自总时长至多 30 秒；编辑视频单段 4–30 秒 | 同上，编辑时另外检查必需视频、adaptive、智能时长 |
+| 单文件与请求体 | 图片小于 30 MB；视频不超过 200 MB；音频不超过 15 MB；JSON 请求体不超过 64 MB | 显示素材名称与超限原因，提示大素材改用远程 URL/asset；不自动压缩或上传 |
+| 输入图片 | 宽高各 300–6000、宽高比 0.4–2.5；格式按文档及模型配置 | 能读取元数据时校验；跨域 URL/asset 无元数据时由服务端校验 |
+| 输入视频 | 宽高各 300–6000、宽高比 0.4–2.5、总像素 407696–8295044、帧率 24–60；编码/容器以官方表为准 | 校验已知元数据；不引入解码/转码库猜测未知值，透传上游校验错误 |
+| 查询等待 | 沿用现有 2500ms 间隔、最多 120 次查询，等待窗口约 5 分钟加网络耗时 | 耗尽或用户停止等待后保留 task ID，可手动继续查询；不重新创建任务 |
+
+输入音频只支持 wav / mp3，输入视频只支持文档列出的 mp4 / mov 编码组合；图片支持 jpeg / png / webp / bmp / tiff / gif，1.5 pro 及以上额外支持 heic / heif。平台可以执行前端不可取得元数据的完整校验。
+
+首期不新增自动重试、并发上限或更长的轮询窗口；若实测需要调整，单独说明默认值与失败处理后再确认。停止浏览器等待不等于取消已在 Ark 执行的任务。
+
+## API 请求与任务状态
+
+创建：`POST {baseUrl}/contents/generations/tasks`。
+
+查询：`GET {baseUrl}/contents/generations/tasks/{id}`。
+
+复用渠道的 Base URL、API Key、代理和 AbortSignal。官方示例基地址为 `https://ark.cn-beijing.volces.com/api/v3`；保留用户自定义前缀，不从此前图片套餐地址推断其一定支持视频。
+
+首尾帧请求示例：
+
+```json
+{
+  "model": "doubao-seedance-2-0-260128",
+  "content": [
+    { "type": "text", "text": "镜头缓慢推进" },
+    { "type": "image_url", "image_url": { "url": "data:image/png;base64,..." }, "role": "first_frame" },
+    { "type": "image_url", "image_url": { "url": "https://example.com/last.png" }, "role": "last_frame" }
+  ],
+  "resolution": "720p",
+  "ratio": "adaptive",
+  "duration": 6,
+  "generate_audio": true,
+  "watermark": false
+}
+```
+
+模式与 `content` 映射：
+
+| 模式 | 内容 |
+| --- | --- |
+| 文生视频 | `type=text`，提示词必填 |
+| 首帧 | 1 个 image_url，role=first_frame |
+| 首尾帧 | 2 个 image_url，分别 first_frame / last_frame，按用户确认的顺序 |
+| 全模态参考 | 图片 reference_image，视频 reference_video，音频 reference_audio；根据模型支持组合 |
+
+只发送该模型支持的顶层参数；不用 OpenAI 的 `seconds`、`size`、`resolution_name` 或 multipart 格式，不把参数拼进 prompt。图/视频参考场景按文档允许空提示词，不继续用纯文本必填规则挡住合法请求。
+
+状态映射：
+
+- `queued`、`running` → 等待中。
+- `succeeded` → 读取 `content.video_url`；成功状态缺少 URL 时明确报错。
+- `failed`、`cancelled`、`expired` → 终止等待并显示服务端错误或对应中文状态；教程列有 expired，即使查询页枚举未列出也要处理。
+- 未知状态 → 显示不支持的状态，保留任务 ID 供再次查询，不能静默判定成功或无限重建任务。
+
+任务保存 `provider: "ark"`、ID 和创建时的渠道限定模型值。后续查询依据任务记录，不能因用户切换当前模型而查询另一渠道。刷新恢复和“获取任务状态”复用此记录。
+
+生成结果复用 `storeGeneratedVideo()` 保存到浏览器素材。源视频链接有效期有限，应及时转存；本地保存失败则保留源链接并明确告知“尚未保存到本地”，保留下载/重试保存入口，不把临时 URL 显示成持久保存成功。
+
+## 参考素材的实际接入
+
+- 图片：支持公网 URL、`asset://`、本地图片转 data URL。远程 URL 和 asset 原样放入请求内容，不包成本地代理地址。
+- 音频：支持公网 URL、`asset://`、本地 wav/mp3 转 data URL，遵守文件和请求体范围。
+- 视频：首期支持公网 URL 和 `asset://`。Ark 创建任务文档未提供视频 Base64 输入方式，不能发送 `blob:`、本地存储键或假定本项目已有公网上传服务。
+- 视频页面补充与模型能力对应的参考素材选择：图片沿用现有入口，参考音频支持本地/URL，参考视频提供 URL/asset 输入。
+- 画布复用已连接的图片、音频、视频输入；对本地视频显示“请提供公网视频地址或 Ark 素材 ID”。需要时在该视频节点添加远程参考来源字段，该字段与本地播放地址分离，不覆盖原视频。
+- 现有资源编号/提示词引用保持稳定，按实际提交顺序编号；不能因为过滤不支持的素材造成用户提示词中的引用错位。
+
+## 实施顺序与文件范围
+
+### 1. 模型配置与参数解析
+
+新增 `web/src/lib/video-model-config.ts`、`web/tests/ark-video.test.ts`；调整 `web/src/stores/use-config-store.ts` 的视频识别与新增模式持久化。
+
+- [x] 注册 7 个型号及官方分辨率、比例范围，区分快速型号匹配优先级。
+- [x] 实现 `getArkVideoCapabilities`、`validateArkVideoSettings`，集中读取和校验 Ark 的 resolution / ratio / duration。
+- [x] Ark 使用明确的 `videoMode`，其中 reference/edit/extend 对应 2.5 参考任务类型；OpenAI/Gemini 保持 frames/reference。
+- [x] 配置节点和生成节点保存对应字段；直接按新字段存储，不做历史数据迁移。
+- [x] 验证 2.0 的 4k、fast/mini 拒绝 1080p、智能 -1 不被截断、1.0 支持 2 秒、2.5 特定场景只提供 adaptive。
+
+### 2. Ark API 适配与素材校验
+
+调整 `web/src/services/api/video.ts`，复用既有鉴权、URL、错误读取与结果下载工具。
+
+- [x] 给 `VideoGenerationTask.provider` 增加 ark，新增 createArkVideoTask / pollArkVideoTask 分支。
+- [x] 按模式构造 JSON content，输入角色互斥，校验素材数量、可访问来源和可取得的元数据。
+- [x] 原生 Ark 请求使用模型规则，保留自定义调用脚本优先级，脚本参数支持合法的 4k / -1。
+- [x] 处理所有终态、成功无 URL、代理转发、取消等待、鉴权错误、限流和套餐权限错误，不自动重新提交。
+
+代表性接口测试：
+
+```ts
+// axios 只作为外部 HTTP 边界替身，测试真实创建/解析函数。
+// 固定输入及预期，不通过被测转换函数生成预期值。
+// 2.0 reference + 4k + -1 -> resolution="4k", duration=-1,
+// content 中分别为 reference_image / reference_video / reference_audio。
+// 2.0 fast + 1080p -> 请求前拒绝，不调用 HTTP。
+// 2.5 edit + 固定时长 -> 请求前拒绝，要求 -1。
+// queued -> running -> succeeded -> 只创建一次，返回 content.video_url。
+// expired/cancelled/failed -> 返回失败；无 URL 的 succeeded 不能成功。
+```
+
+### 3. 模型选择、参数面板和素材入口
+
+调整 `web/src/components/video-settings-panel.tsx`、`web/src/components/model-picker.tsx`（仅在支持提示需要时）、`web/src/components/layout/channel-editor-drawer.tsx`、`web/src/components/canvas/canvas-video-settings-popover.tsx`、`web/src/pages/video/index.tsx` 和相关画布节点参数入口。
+
+- [x] 从注册表提供渠道型号选择，视频选择器保留“渠道已配置”约束。
+- [x] 模式、分辨率、比例、时长、智能时长、声音和素材入口随模型刷新。
+- [x] 首尾帧与全模态参考使用独立角色，不使用现有“超过 2 张自动切参考”逻辑推断 Ark 模式。
+- [x] 让 2.5 的参考任务类型影响比例、时长可选项；不改用户 prompt，也不推测自然语言里的任务意图。
+- [x] 补齐视频页面音频和远程视频输入，画布复用已连接素材；UI 文案用中文并沿用画布主题。
+- [x] 公共模型配置在使用处直接读取；局部素材信息只传必要的输入摘要，不层层传配置表。
+
+### 4. 任务保存与恢复
+
+调整 `web/src/types/canvas.ts`、`web/src/types/media.ts`、`web/src/pages/canvas/project.tsx`、`web/src/lib/canvas/canvas-generation-helpers.ts`、`web/src/components/canvas/canvas-node-generation.ts` 及视频页面的任务记录。参考视频元数据增加独立的远程参考来源字段，并从节点传入 Ark 素材解析流程；原本的播放 URL 和本地 storageKey 保留各自用途。
+
+- [x] 保存、恢复 ark provider，去掉“非 Gemini 一律 OpenAI”的归类。
+- [x] 任务查询固定到创建时的渠道模型；修改面板模型不改变既有任务归属。
+- [x] 刷新、停止等待、轮询耗尽后保留任务 ID；只有终态失败按现有流程结束任务。
+- [x] 保存结果到本地素材，源 URL 与本地保存状态可区分。
+
+### 5. 验证与文档
+
+新增 `web/tests/ark-video-settings.test.tsx`，与 Ark API 测试一起执行：
+
+```bash
+cd web
+bun test tests/ark-video.test.ts tests/ark-video-settings.test.tsx
+```
+
+- [x] 测试官方型号能力、模式互斥、数量/时长/大小边界和无效参数不发请求。
+- [x] 面板测试 2.0 → fast/mini → 1.0 pro fast 切换后 4k、1080p、首尾帧、声音等选项正确更新；不静默保留可提交的非法组合。
+- [x] 测试 2.5 首尾帧/编辑/延长的 adaptive 约束，2.0 仅音频拒绝、2.5 仅音频可提交。
+- [x] 测试 blob 视频拒绝、合法 URL/asset 原样传递、本地图片和音频正确转码为 data URL。
+- [x] 模拟 HTTP 测试任务归属、上游错误、固定端点恢复与取消；刷新、继续查询及保存失败提示保留浏览器人工验收。
+- [x] 回归 OpenAI/Gemini 和自定义脚本；不执行构建或 typecheck。
+- [x] 新增 Ark 交互使用中文，既有国际化文案沿用；更新旧 Ark 渠道提示。
+- [ ] 浏览器验收使用独立页面，不关闭用户现有窗口。用已配置且有权限的模型验证至少一次文生视频、首帧和多模态参考。
+- [x] 实现完成后将 TODO 移到 pending-test，并在 CHANGELOG 的 Unreleased 添加版本级记录；用户确认后再更新正式功能说明。
+
+完成标准：在 Ark 渠道选中已配置的 Seedance 模型后，能看到该模型真实支持的模式与参数，提交正确 JSON 任务，刷新后继续查询，并在完成后播放、下载或保存视频。

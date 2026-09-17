@@ -521,7 +521,7 @@ export default {
             ark: "Ark (Volcengine)",
             arkImageOptions: "Ark image options",
             arkDocs: "Parameter reference",
-            arkHint: "Applies to built-in image generation and reference-image editing for this provider. Custom request scripts must set their own parameters. Keep /api/plan/v3 for Agent Plan; add models manually if fetching the list is unavailable.",
+            arkHint: "Applies to built-in image generation and reference-image editing for this provider. Custom request scripts must set their own parameters. Choose Standard API or Agent Plan above; configure models in the channel model list.",
             arkWatermark: "Add AI-generated watermark",
             arkSizeHint: "Image settings offer resolution and aspect ratio presets for recognized Seedream models and validate dimensions before generation. Check existing dimensions after switching models.",
             arkOutputFormat: "Output format",

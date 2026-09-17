@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { defaultArkImageOptions, defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ArkImageOptions, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
+import { arkAccessConfig, arkAccessModes, type ArkAccessMode } from "@/lib/ark-channel-config";
 
 type ScriptTarget = { name: string; capability: ModelCapability; value: string };
 
@@ -33,8 +34,14 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const setModels = (models: ChannelModel[]) => patch({ models });
 
     const changeApiFormat = (apiFormat: ApiCallFormat) => {
-        const baseUrl = !draft.baseUrl.trim() || draft.baseUrl.trim() === defaultBaseUrlForApiFormat(draft.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
-        patch({ apiFormat, baseUrl });
+        const previousDefault = draft.apiFormat === "ark" ? arkAccessConfig(draft.arkAccessMode).baseUrl : defaultBaseUrlForApiFormat(draft.apiFormat);
+        const baseUrl = !draft.baseUrl.trim() || draft.baseUrl.trim().replace(/\/+$/, "") === previousDefault ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
+        patch({ apiFormat, baseUrl, arkAccessMode: apiFormat === "ark" ? "api" : undefined });
+    };
+
+    const changeArkAccess = (arkAccessMode: ArkAccessMode) => {
+        const isDefault = !draft.baseUrl.trim() || arkAccessModes.some((item) => item.baseUrl === draft.baseUrl.trim().replace(/\/+$/, ""));
+        patch({ arkAccessMode, ...(isDefault ? { baseUrl: arkAccessConfig(arkAccessMode).baseUrl } : {}) });
     };
 
     const applySelection = (names: string[]) => {
@@ -88,6 +95,11 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
 
             {draft.apiFormat === "ark" && (
                 <div className="mt-6 space-y-4">
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-semibold">接入方式</span>
+                        <Select aria-label="Ark 接入方式" className="w-full" value={draft.arkAccessMode || "api"} options={[...arkAccessModes]} onChange={changeArkAccess} />
+                    </label>
+                    <div className="text-xs opacity-60">请使用所选方式对应的 API Key。切换方式会更新默认地址，自定义地址保留；模型统一在下方“渠道模型”中配置。</div>
                     <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-semibold">{t("config.channelEditor.arkImageOptions")}</span>
                         <a href="https://docs.volcengine.com/docs/82379/1541523?lang=zh" target="_blank" rel="noreferrer" className="text-xs">{t("config.channelEditor.arkDocs")}</a>

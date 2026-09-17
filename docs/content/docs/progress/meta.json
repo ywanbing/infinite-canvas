@@ -5,6 +5,7 @@
   "pages": [
     "[Changelog](/docs/progress/changelog)",
     "local-agent-integration-plan",
+    "ark-video-api-plan",
     "prompt-chip-input-plan",
     "pending-test",
     "todo"

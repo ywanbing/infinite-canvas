@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { arkAccessConfig, type ArkAccessMode } from "@/lib/ark-channel-config";
 
 export type ApiCallFormat = "openai" | "gemini" | "ark";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -31,6 +32,7 @@ export type ModelChannel = {
     apiFormat: ApiCallFormat;
     models: ChannelModel[];
     arkImageOptions?: ArkImageOptions;
+    arkAccessMode?: ArkAccessMode;
 };
 
 export type AiConfig = {
@@ -64,6 +66,7 @@ export type AiConfig = {
     proxyEnabled: boolean;
     proxyUrl: string;
     arkImageOptions?: ArkImageOptions;
+    arkAccessMode?: ArkAccessMode;
 };
 
 export type WebdavSyncConfig = {
@@ -156,7 +159,7 @@ type ConfigStore = {
     clearPromptContinue: () => void;
 };
 
-const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "wan", "hailuo"];
+const VIDEO_KEYWORDS = ["video", "seedance", "sora", "veo", "kling", "wan", "hailuo"];
 
 export function boolConfig(value: string, fallback: boolean) {
     return value ? value === "true" : fallback;
@@ -279,7 +282,7 @@ export const useConfigStore = create<ConfigStore>()(
                         vquality: config.vquality || "720",
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
-                        videoMode: config.videoMode === "reference" ? "reference" : "frames",
+                        videoMode: config.videoMode || "frames",
                         canvasImageCount: config.canvasImageCount || "3",
                         proxyEnabled: Boolean(config.proxyEnabled),
                         proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
@@ -312,14 +315,16 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
 
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
+    const arkAccessMode = apiFormat === "ark" ? arkAccessConfig(channel?.arkAccessMode).value : undefined;
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || i18n.t("config.channels.newName"),
-        baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
+        baseUrl: channel?.baseUrl?.trim() || (apiFormat === "ark" ? arkAccessConfig(arkAccessMode).baseUrl : defaultBaseUrlForApiFormat(apiFormat)),
         apiKey: channel?.apiKey || "",
         apiFormat,
         models: normalizeChannelModels(channel?.models),
         arkImageOptions: channel?.arkImageOptions,
+        arkAccessMode,
     };
 }
 
@@ -444,6 +449,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
         arkImageOptions: channel.arkImageOptions,
+        arkAccessMode: channel.apiFormat === "ark" ? channel.arkAccessMode || "api" : undefined,
     };
 }
 

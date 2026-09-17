@@ -1,9 +1,7 @@
+import "./browser-storage";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import axios from "axios";
 
-const values = new Map<string, string>();
-Object.defineProperty(globalThis, "localStorage", { value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) } });
-Object.defineProperty(globalThis, "window", { value: { localStorage } });
 const { createModelChannel, defaultConfig, resolveModelRequestConfig, useConfigStore } = await import("../src/stores/use-config-store");
 const { requestGeneration, requestEdit } = await import("../src/services/api/image");
 const { computeModelImageSize, getImageModelConfig, imageModelConfigs, modelImageSizeError, readModelImageSize, resolveModelImageSize } = await import("../src/lib/image-model-config");

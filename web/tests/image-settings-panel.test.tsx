@@ -1,10 +1,8 @@
+import "./browser-storage";
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { canvasThemes } from "../src/lib/canvas-theme";
 
-if (typeof localStorage === "undefined") {
-    Object.defineProperty(globalThis, "localStorage", { value: { getItem: () => null, setItem: () => {}, removeItem: () => {} } });
-}
 const { createModelChannel, defaultConfig } = await import("../src/stores/use-config-store");
 const { ImageSettingsPanel, imageSizeLabel } = await import("../src/components/image-settings-panel");
 

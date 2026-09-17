@@ -169,9 +169,9 @@ export function buildNodeResponseMessages(context: NodeGenerationContext): AiTex
     ];
 }
 
-export async function hydrateNodeGenerationContext(context: NodeGenerationContext) {
+export async function hydrateNodeGenerationContext(context: NodeGenerationContext, preserveRemoteImages = false) {
     const { imageToDataUrl } = await import("@/services/image-storage");
-    return { ...context, referenceImages: await Promise.all(context.referenceImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) }))) };
+    return { ...context, referenceImages: await Promise.all(context.referenceImages.map(async (image) => preserveRemoteImages && /^(https?:\/\/|asset:\/\/)/i.test(image.url || image.dataUrl) ? image : { ...image, dataUrl: await imageToDataUrl(image) })) };
 }
 
 function readNodeTextInput(node: CanvasNodeData) {
@@ -198,16 +198,20 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
         type: node.metadata.mimeType || "image/png",
         dataUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
+        width: node.metadata.naturalWidth,
+        height: node.metadata.naturalHeight,
+        bytes: node.metadata.bytes,
     };
 }
 
 function readReferenceVideo(node: CanvasNodeData): ReferenceVideo | null {
-    if (node.type !== CanvasNodeType.Video || !node.metadata?.content) return null;
+    if (node.type !== CanvasNodeType.Video || (!node.metadata?.content && !node.metadata?.videoReferenceUrl)) return null;
     return {
         id: node.id,
         name: `${node.title || node.id}.mp4`,
         type: node.metadata.mimeType || "video/mp4",
-        url: node.metadata.content,
+        url: node.metadata.content || "",
+        referenceUrl: node.metadata.videoReferenceUrl,
         storageKey: node.metadata.storageKey,
         bytes: node.metadata.bytes,
         width: node.metadata.naturalWidth,
@@ -225,5 +229,6 @@ function readReferenceAudio(node: CanvasNodeData): ReferenceAudio | null {
         url: node.metadata.content,
         storageKey: node.metadata.storageKey,
         durationMs: node.metadata.durationMs,
+        bytes: node.metadata.bytes,
     };
 }

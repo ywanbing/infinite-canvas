@@ -521,7 +521,7 @@ export default {
             ark: "Ark（火山方舟）",
             arkImageOptions: "Ark 生图参数",
             arkDocs: "参数文档",
-            arkHint: "用于本渠道的内置生图和参考图编辑。自定义调用脚本需自行设置参数。Agent Plan 请保留 /api/plan/v3 地址，模型列表无法获取时可手动添加模型。",
+            arkHint: "用于本渠道的内置生图和参考图编辑。自定义调用脚本需自行设置参数。请在上方选择标准 API 或 Agent Plan；模型统一在渠道模型中配置。",
             arkWatermark: "添加 AI 生成水印",
             arkSizeHint: "图片设置会根据已识别的 Seedream 模型提供分辨率和比例预设，并在生成前校验尺寸；切换模型后请检查已有尺寸。",
             arkOutputFormat: "输出格式",

@@ -705,10 +705,13 @@ function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
                 <Video className="size-7 opacity-35" />
-                <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
+                <span className="text-sm">{node.metadata?.videoReferenceUrl ? "已配置 Ark 参考视频来源" : t("canvas.node.emptyVideo")}</span>
             </div>
         );
-    return <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
+    return <div className="relative h-full w-full">
+        <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />
+        {node.metadata.errorDetails && !node.metadata.storageKey && <div role="alert" className="absolute inset-x-2 top-2 rounded px-2 py-1 text-xs" style={{ background: theme.toolbar.panel, color: theme.node.text }}>{node.metadata.errorDetails}</div>}
+    </div>;
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {

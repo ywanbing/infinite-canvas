@@ -2,8 +2,9 @@ import axios from "axios";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { dataUrlToFile, getDataUrlByteSize, readFileAsDataUrl } from "@/lib/image-utils";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
+import { resolveArkVideoModel, validateArkVideoSettings, type ArkVideoMode, type ArkVideoModel } from "@/lib/video-model-config";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
@@ -18,8 +19,8 @@ type RequestOptions = { signal?: AbortSignal };
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "plugin"; model: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; sourceUrl?: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "ark" | "plugin"; model: string; baseUrl?: string; arkAccessMode?: AiConfig["arkAccessMode"] };
 type GeminiInlineData = { bytesBase64Encoded: string; mimeType: string };
 type GeminiVideoOperation = {
     name?: string;
@@ -74,8 +75,8 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     const script = resolveModelScript(config, selectedModel);
     if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
-    if (requestConfig.apiFormat === "ark") throw new Error(i18n.t("config.channelEditor.arkCustomScriptRequired", { capability: i18n.t("config.channelEditor.capabilities.video") }));
     assertVideoConfig(requestConfig, requestConfig.model);
+    if (requestConfig.apiFormat === "ark") return createArkVideoTask(requestConfig, selectedModel, prompt, references, options);
     if (requestConfig.apiFormat === "gemini") return createGeminiVideoTask(requestConfig, selectedModel, prompt, references, options);
     return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, options);
 }
@@ -85,8 +86,14 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
         const result = pluginVideoResults.get(task.id);
         return result ? { status: "completed", result } : { status: "failed", error: apiText("pluginVideoExpired") };
     }
+    if (task.provider === "ark" && task.model.includes("::") && !config.channels.some((channel) => channel.id === task.model.split("::")[0])) throw new Error("该视频任务所属渠道已删除，请恢复原渠道后继续查询。");
     const requestConfig = resolveModelRequestConfig(config, task.model);
+    if (task.provider === "ark") {
+        if (task.baseUrl) requestConfig.baseUrl = task.baseUrl;
+        if (task.arkAccessMode) requestConfig.arkAccessMode = task.arkAccessMode;
+    }
     assertVideoConfig(requestConfig, requestConfig.model);
+    if (task.provider === "ark") return pollArkVideoTask(requestConfig, task, options);
     if (task.provider === "gemini") return pollGeminiVideoTask(requestConfig, task, options);
     return pollOpenAIVideoTask(requestConfig, task, options);
 }
@@ -107,9 +114,9 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
             videos,
             audios,
             params: {
-                seconds: normalizeVideoSeconds(config.videoSeconds),
+                seconds: config.apiFormat === "ark" ? config.videoSeconds : normalizeVideoSeconds(config.videoSeconds),
                 size: normalizeVideoSize(config.size, config.vquality),
-                resolution: normalizeVideoResolution(config.vquality),
+                resolution: config.vquality === "4k" ? "4k" : normalizeVideoResolution(config.vquality),
                 ratio: videoAspectRatio(config.size),
                 generateAudio: boolConfig(config.videoGenerateAudio, true),
                 watermark: boolConfig(config.videoWatermark, false),
@@ -121,6 +128,110 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
     const id = nanoid();
     pluginVideoResults.set(id, result);
     return { id, provider: "plugin", model };
+}
+
+function arkVideoUrl(config: AiConfig, id?: string) {
+    return withLocalProxy(`${config.baseUrl.trim().replace(/\/+$/, "")}/contents/generations/tasks${id ? `/${encodeURIComponent(id)}` : ""}`);
+}
+
+type ArkMediaMetadata = { name: string; type?: string; bytes?: number; width?: number; height?: number; durationMs?: number; fps?: number };
+
+function validateArkMedia(item: ArkMediaMetadata, kind: "image" | "video" | "audio", profile: ArkVideoModel, edit = false) {
+    const limits = profile.mediaLimits;
+    const bytes = limits[`${kind}Bytes`];
+    if (item.bytes !== undefined && (kind === "image" ? item.bytes >= bytes : item.bytes > bytes)) throw new Error(`${item.name} 超出${kind === "image" ? "图片小于" : "文件不超过"} ${bytes / 1024 ** 2} MB 的限制。`);
+    const formats = kind === "image" ? ["jpeg", "jpg", "png", "webp", "bmp", "tiff", "tif", "gif", ...(profile.supportsAudio ? ["heic", "heif"] : [])] : kind === "video" ? ["mp4", "mov", "quicktime"] : ["wav", "x-wav", "wave", "mpeg", "mp3"];
+    const format = item.type?.split("/")[1]?.split(";")[0];
+    if (format && format !== "octet-stream" && !formats.includes(format)) throw new Error(`${item.name} 的${kind === "image" ? "图片" : kind === "video" ? "视频" : "音频"}格式不受支持。`);
+    if (kind !== "audio") {
+        const { width, height } = item;
+        if ([width, height].some((value) => value !== undefined && (value < 300 || value > 6000))) throw new Error(`${item.name} 的宽高必须在 300–6000 像素之间。`);
+        if (width && height && (width / height < 0.4 || width / height > 2.5)) throw new Error(`${item.name} 的宽高比必须在 0.4–2.5 之间。`);
+        if (kind === "video" && width && height && (width * height < 407696 || width * height > 8295044)) throw new Error(`${item.name} 的视频总像素数必须在 407696–8295044 之间。`);
+        if (kind === "video" && item.fps !== undefined && (item.fps < 24 || item.fps > 60)) throw new Error(`${item.name} 的帧率必须在 24–60 之间。`);
+    }
+    if (kind !== "image" && item.durationMs !== undefined && (item.durationMs < (edit ? 4 : limits.minDuration) * 1000 || item.durationMs > limits.maxDuration * 1000)) throw new Error(`${item.name} 的时长必须在 ${edit ? 4 : limits.minDuration}–${limits.maxDuration} 秒之间。`);
+}
+
+function arkRemoteUrl(value = "") { return /^(https?:\/\/|asset:\/\/).+/i.test(value); }
+
+async function createArkVideoTask(config: AiConfig, model: string, prompt: string, images: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+    const error = validateArkVideoSettings({ ...config, model });
+    if (error) throw new Error(error);
+    const profile = resolveArkVideoModel(config.model, config.arkAccessMode)!;
+    const mode = config.videoMode as ArkVideoMode;
+    const videos = options?.videos || [], audios = options?.audios || [];
+    const omni = ["reference", "edit", "extend"].includes(mode);
+    if (mode === "text" && !prompt.trim()) throw new Error("文生视频请输入提示词。");
+    const imageCount = mode === "text" ? 0 : mode === "first_frame" ? 1 : 2;
+    if (!omni && (images.length !== imageCount || videos.length || audios.length)) throw new Error(`当前模式需要 ${imageCount} 张图片，且不能混用参考视频或音频。`);
+    if (omni) {
+        const limits = profile.mediaLimits;
+        if (!images.length && !videos.length && !audios.length) throw new Error("请添加参考素材。");
+        if (images.length > limits.images || videos.length > limits.videos || audios.length > limits.audios) throw new Error(`参考素材最多 ${limits.images} 张图片、${limits.videos} 个视频、${limits.audios} 个音频。`);
+        if (!limits.audioOnly && audios.length && !images.length && !videos.length) throw new Error("当前模型不能仅参考音频，请同时提供图片或视频。");
+        if ((mode === "edit" || mode === "extend") && !videos.length) throw new Error("视频编辑或延长必须提供参考视频。");
+        for (const list of [videos, audios]) if (list.reduce((sum, item) => sum + (item.durationMs || 0), 0) > limits.totalDuration * 1000) throw new Error(`参考视频、音频各自总时长不能超过 ${limits.totalDuration} 秒。`);
+    }
+    const content: Record<string, unknown>[] = prompt.trim() ? [{ type: "text", text: prompt }] : [];
+    for (const [index, item] of images.entries()) {
+        validateArkMedia(item, "image", profile);
+        const source = item.url || item.dataUrl;
+        const url = arkRemoteUrl(source) ? source : await imageToDataUrl(item, options);
+        if (!arkRemoteUrl(url) && !/^data:image\/[^;]+;base64,/i.test(url)) throw new Error(`${item.name} 不是有效图片来源。`);
+        if (url.startsWith("data:")) validateArkMedia({ ...item, bytes: getDataUrlByteSize(url), type: url.slice(5, url.indexOf(";")) }, "image", profile);
+        content.push({ type: "image_url", image_url: { url }, role: omni ? "reference_image" : index ? "last_frame" : "first_frame" });
+    }
+    for (const item of videos) {
+        validateArkMedia(item, "video", profile, mode === "edit");
+        const url = item.referenceUrl || item.url;
+        if (!arkRemoteUrl(url)) throw new Error(`${item.name}：请提供公网 HTTP(S) 视频地址或 Ark 素材 ID，本地视频不能直接作为 Ark 参考。`);
+        content.push({ type: "video_url", video_url: { url }, role: "reference_video" });
+    }
+    for (const item of audios) {
+        validateArkMedia(item, "audio", profile);
+        let url = item.url;
+        if (!arkRemoteUrl(url) && !/^data:audio\/[^;]+;base64,/i.test(url)) {
+            const file = await referenceMediaToFile(item, "ref.mp3", "invalidReferenceAudio", options);
+            validateArkMedia({ ...item, bytes: file.size, type: file.type }, "audio", profile);
+            url = await readFileAsDataUrl(file);
+        }
+        if (url.startsWith("data:")) validateArkMedia({ ...item, bytes: getDataUrlByteSize(url), type: url.slice(5, url.indexOf(";")) }, "audio", profile);
+        content.push({ type: "audio_url", audio_url: { url }, role: "reference_audio" });
+    }
+    const body = {
+        model: config.model === profile.modelPrefix ? profile.modelId : config.model, content,
+        resolution: config.vquality === "4k" ? "4k" : `${config.vquality}p`, ratio: config.size, duration: Number(config.videoSeconds),
+        watermark: boolConfig(config.videoWatermark, false),
+        ...(profile.supportsAudio ? { generate_audio: boolConfig(config.videoGenerateAudio, true) } : {}),
+        ...(profile.modelPrefix === "doubao-seedance-2-5" && omni ? { omni_reference_task_type: mode } : {}),
+    };
+    if (new Blob([JSON.stringify(body)]).size > 64 * 1024 ** 2) throw new Error("请求体不能超过 64 MB，请将大素材改为公网 URL 或 Ark 素材 ID。");
+    try {
+        const created = (await axios.post<{ id?: string }>(arkVideoUrl(config), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data;
+        if (!created.id) throw new Error(apiText("noVideoTaskId"));
+        return { id: created.id, provider: "ark", model, baseUrl: config.baseUrl, arkAccessMode: config.arkAccessMode };
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        throw new Error(readAxiosError(error, apiText("videoTaskCreateFailed")));
+    }
+}
+
+async function pollArkVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    try {
+        const state = (await axios.get<VideoResponse>(arkVideoUrl(config, task.id), { headers: aiHeaders(config), signal: options?.signal })).data;
+        if (state.status === "queued" || state.status === "running") return { status: "pending" };
+        if (state.status === "succeeded") {
+            if (!state.content?.video_url) return { status: "failed", error: "视频任务已成功，但响应缺少视频地址。" };
+            return { status: "completed", result: { ...await videoResultFromUrl(state.content.video_url, options), sourceUrl: state.content.video_url } };
+        }
+        const errors: Record<string, string> = { failed: "视频生成失败。", cancelled: "视频任务已取消。", expired: "视频任务已过期。" };
+        if (state.status && errors[state.status]) return { status: "failed", error: readApiErrorMessage(state.error) || errors[state.status] };
+        throw new Error(`不支持的视频任务状态：${state.status || "空"}，任务 ID 已保留，可继续查询。`);
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
+    }
 }
 
 function videoPluginResult(result: unknown): VideoGenerationResult {
@@ -136,15 +247,14 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
-    if (result.blob) return uploadMediaFile(result.blob, "video");
-    if (result.url) {
-        try {
-            return await uploadMediaFile(result.url, "video");
-        } catch {
-            return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
-        }
+    if (!result.blob && !result.url) throw new Error(apiText("noPlayableVideo"));
+    try {
+        return await uploadMediaFile(result.blob || result.url!, "video");
+    } catch (error) {
+        const url = result.sourceUrl || result.url;
+        if (!url) throw error;
+        return { url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
     }
-    throw new Error(apiText("noPlayableVideo"));
 }
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {

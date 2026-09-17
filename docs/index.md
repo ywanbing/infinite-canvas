@@ -31,6 +31,7 @@
 
 ## Project Progress
 
+- [Ark 视频 API 接入计划](/docs/progress/ark-video-api-plan)
 - [Changelog](/docs/progress/changelog)
 - [Pending Tests](/docs/progress/pending-test)
 - [TODO](/docs/progress/todo)
