@@ -28,6 +28,13 @@ export default {
         durationSeconds: "{{seconds}}秒",
         imageReadFailed: "读取图片失败",
     },
+    imageModelSize: {
+        hint: "{{model}}：{{scales}}；总像素 {{min}}–{{max}}，宽高比 1:{{ratio}}–{{ratio}}:1。",
+        invalidFormat: "{{model}} 的尺寸须为正整数宽高、有效比例或支持的分辨率，例如 2048x2048、16:9、2K。",
+        unsupportedScale: "{{model}} 不支持 {{scale}}，请选择 {{scales}}。",
+        pixels: "{{model}} 要求总像素在 {{min}}–{{max}} 之间，当前 {{width}}×{{height}} = {{pixels}}，请调整尺寸。",
+        ratio: "{{model}} 要求宽高比在 1:{{ratio}}–{{ratio}}:1 之间，请调整尺寸。",
+    },
     settingsPanels: {
         common: { auto: "自动", low: "低", medium: "中", high: "高", xhigh: "极高" },
         image: { title: "图像设置", quality: "质量", size: "尺寸", align16: "16 倍数对齐", align16Hint: "输入完成后自动向上补成 16 的倍数", resolution: "分辨率", aspectRatio: "宽高比", transparent: "透明背景", transparentHint: "开启后生成无背景的透明图像（仅部分模型可用）", count: "生成张数", images: "{{count}} 张" },
@@ -516,7 +523,7 @@ export default {
             arkDocs: "参数文档",
             arkHint: "用于本渠道的内置生图和参考图编辑。自定义调用脚本需自行设置参数。Agent Plan 请保留 /api/plan/v3 地址，模型列表无法获取时可手动添加模型。",
             arkWatermark: "添加 AI 生成水印",
-            arkSizeHint: "Seedream 5.0 lite / 4.5 请在生图面板选择 2K，1K 不受支持；5.0 pro 可选择 1K / 2K。尺寸仍需符合对应模型要求。",
+            arkSizeHint: "图片设置会根据已识别的 Seedream 模型提供分辨率和比例预设，并在生成前校验尺寸；切换模型后请检查已有尺寸。",
             arkOutputFormat: "输出格式",
             arkModelDefault: "跟随模型默认",
             arkOutputFormatHint: "指定格式仅适用于 Seedream 5.0 pro / lite。",

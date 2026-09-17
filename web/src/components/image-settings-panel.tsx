@@ -1,11 +1,12 @@
 import { type ReactNode, useState } from "react";
-import { ConfigProvider, Switch } from "antd";
+import { ConfigProvider, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaRatioOptions, mediaScaleOptions, readMediaDimensions } from "@/lib/media-size";
-import type { AiConfig } from "@/stores/use-config-store";
+import { computeModelImageSize, getImageModelConfig, modelImageSizeError, readModelImageSize } from "@/lib/image-model-config";
+import { resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
     { value: "auto", labelKey: "auto" },
@@ -36,17 +37,25 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const transparentBackground = config.background === "transparent";
-    const selectedScale = inferMediaScale(activeSize);
-    const selectedRatio = inferMediaRatio(activeSize);
-    const dimensions = readMediaDimensions(activeSize, selectedScale, selectedRatio);
-    const applySize = (scale: string, ratio: string) => onConfigChange("size", computeMediaSize(scale, ratio));
-    const selectScale = (scale: string) => applySize(scale, selectedRatio === "auto" ? "1:1" : selectedRatio);
+    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const modelConfig = getImageModelConfig(requestConfig.apiFormat, requestConfig.model);
+    const selection = modelConfig ? readModelImageSize(modelConfig, activeSize) : undefined;
+    const selectedScale = selection?.scale || inferMediaScale(activeSize);
+    const selectedRatio = selection?.ratio || inferMediaRatio(activeSize);
+    const dimensions = selection || readMediaDimensions(activeSize, selectedScale, selectedRatio);
+    const scaleOptions = modelConfig ? [...Object.keys(modelConfig.presets), "auto"] : mediaScaleOptions;
+    const presets = modelConfig?.presets[selectedScale] || modelConfig?.presets[modelConfig.defaultScale];
+    const ratioOptions = presets ? [...Object.keys(presets).map((value) => { const [width, height] = value.split(":").map(Number); return { value, width, height }; }), { value: "auto", width: 0, height: 0 }] : mediaRatioOptions;
+    const sizeError = modelConfig ? modelImageSizeError(modelConfig, activeSize) : "";
+    const alignToStep = !modelConfig && snapDimensionToStep;
+    const applySize = (scale: string, ratio: string) => onConfigChange("size", modelConfig ? computeModelImageSize(modelConfig, Object.hasOwn(modelConfig.presets, scale) ? scale : "auto", ratio) : computeMediaSize(scale, ratio));
+    const selectScale = (scale: string) => modelConfig && scale === "auto" ? onConfigChange("size", "auto") : applySize(scale, selectedRatio === "auto" && !modelConfig ? "1:1" : selectedRatio);
     const selectRatio = (ratio: string) => applySize(selectedScale, ratio);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
         const width = key === "width" ? next : dimensions.width;
         const height = key === "height" ? next : dimensions.height;
-        onConfigChange("size", `${alignDimension(width, snapDimensionToStep)}x${alignDimension(height, snapDimensionToStep)}`);
+        onConfigChange("size", `${alignDimension(width, alignToStep)}x${alignDimension(height, alignToStep)}`);
     };
 
     return (
@@ -74,27 +83,29 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-3">
                         <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.size")}</SettingTitle>
-                        <div className="flex items-center gap-2">
+                        {!modelConfig && <div className="flex items-center gap-2">
                             <span className="text-xs font-medium" style={{ color: theme.node.muted }}>
                                 {t("settingsPanels.image.align16")}
                             </span>
                             <span title={t("settingsPanels.image.align16Hint")} onMouseDown={(event) => event.stopPropagation()}>
                                 <Switch size="small" checked={snapDimensionToStep} onChange={setSnapDimensionToStep} />
                             </span>
-                        </div>
+                        </div>}
                     </div>
                     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                        <DimensionInput prefix="W" value={dimensions.width} disabled={selectedRatio === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                        <DimensionInput prefix="W" value={dimensions.width} disabled={selectedRatio === "auto"} theme={theme} alignToStep={alignToStep} onChange={(value) => updateDimension("width", value)} />
                         <span className="text-lg opacity-45">↔</span>
-                        <DimensionInput prefix="H" value={dimensions.height} disabled={selectedRatio === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                        <DimensionInput prefix="H" value={dimensions.height} disabled={selectedRatio === "auto"} theme={theme} alignToStep={alignToStep} onChange={(value) => updateDimension("height", value)} />
                     </div>
+                    {modelConfig && <div className="text-xs" style={{ color: theme.node.muted }}>{t("imageModelSize.hint", { model: modelConfig.name, scales: Object.keys(modelConfig.presets).join(" / ").toUpperCase(), min: modelConfig.minPixels, max: modelConfig.maxPixels, ratio: modelConfig.maxRatio })}</div>}
+                    {sizeError && <Typography.Text type="danger" role="alert" className="!text-xs">{sizeError}</Typography.Text>}
                 </div>
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.resolution")}</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {mediaScaleOptions.map((value) => (
+                        {scaleOptions.map((value) => (
                             <OptionPill key={value} selected={selectedScale === value} theme={theme} onClick={() => selectScale(value)}>
-                                {value === "auto" ? t("settingsPanels.common.auto") : value}
+                                {value === "auto" ? t("settingsPanels.common.auto") : value.toUpperCase()}
                             </OptionPill>
                         ))}
                     </div>
@@ -102,7 +113,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.aspectRatio")}</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {mediaRatioOptions.map((item) => (
+                        {ratioOptions.map((item) => (
                             <button
                                 key={item.value}
                                 type="button"
@@ -164,7 +175,17 @@ export function imageQualityLabel(value: string) {
     return (["auto", "high", "medium", "low"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
 }
 
-export function imageSizeLabel(size: string) {
+export function imageSizeLabel(size: string, config?: AiConfig) {
+    if (config) {
+        const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+        const modelConfig = getImageModelConfig(requestConfig.apiFormat, requestConfig.model);
+        if (modelConfig) {
+            const selection = readModelImageSize(modelConfig, size);
+            if (selection.scale === "auto") return i18n.t("settingsPanels.common.auto");
+            if (selection.scale === "custom") return size;
+            return selection.ratio === "auto" ? `${selection.scale.toUpperCase()} · ${i18n.t("settingsPanels.common.auto")}` : `${selection.scale.toUpperCase()} · ${selection.ratio}`;
+        }
+    }
     const scale = inferMediaScale(size);
     const ratio = inferMediaRatio(size);
     if (ratio === "auto" || size === "auto") return i18n.t("settingsPanels.common.auto");

@@ -8,6 +8,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
+import { getImageModelConfig, resolveModelImageSize } from "@/lib/image-model-config";
 import type { ReferenceImage } from "@/types/image";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
@@ -201,6 +202,11 @@ function resolveRequestSize(quality: string | undefined, size: string) {
     }
     if (value.includes(":")) return resolveSize(quality, value);
     throw new Error(apiText("invalidImageSizeFormat"));
+}
+
+function resolveConfigImageSize(config: AiConfig) {
+    const modelConfig = getImageModelConfig(config.apiFormat, config.model);
+    return modelConfig ? resolveModelImageSize(modelConfig, config.size) : resolveRequestSize(normalizeQuality(config.quality), config.size);
 }
 
 function resolveGeminiImageConfig(config: AiConfig) {
@@ -725,7 +731,7 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 
 async function requestArkImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
     const { watermark, outputFormat, promptMode } = config.arkImageOptions || defaultArkImageOptions;
-    const size = resolveRequestSize(normalizeQuality(config.quality), config.size);
+    const size = resolveConfigImageSize(config);
     const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
     const body = {
         model: config.model,
@@ -751,7 +757,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const requestSize = resolveConfigImageSize(requestConfig);
         const background = normalizeBackground(config.background);
         try {
             const result = await runModelPlugin({
@@ -819,7 +825,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const requestSize = resolveConfigImageSize(requestConfig);
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {

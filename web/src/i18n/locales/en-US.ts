@@ -28,6 +28,13 @@ export default {
         durationSeconds: "{{seconds}}s",
         imageReadFailed: "Failed to read image",
     },
+    imageModelSize: {
+        hint: "{{model}}: {{scales}}; {{min}}–{{max}} total pixels, aspect ratio 1:{{ratio}}–{{ratio}}:1.",
+        invalidFormat: "{{model}} requires positive integer dimensions, a valid ratio or a supported resolution, e.g. 2048x2048, 16:9 or 2K.",
+        unsupportedScale: "{{model}} does not support {{scale}}. Select {{scales}}.",
+        pixels: "{{model}} requires {{min}}–{{max}} total pixels. Current size: {{width}}×{{height}} = {{pixels}}. Adjust the dimensions.",
+        ratio: "{{model}} requires an aspect ratio between 1:{{ratio}} and {{ratio}}:1. Adjust the dimensions.",
+    },
     settingsPanels: {
         common: { auto: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high" },
         image: { title: "Image settings", quality: "Quality", size: "Size", align16: "Align to multiples of 16", align16Hint: "Round dimensions up to the next multiple of 16 after input", resolution: "Resolution", aspectRatio: "Aspect ratio", transparent: "Transparent background", transparentHint: "Generate an image without a background when supported by the model", count: "Image count", images: "{{count}} images" },
@@ -516,7 +523,7 @@ export default {
             arkDocs: "Parameter reference",
             arkHint: "Applies to built-in image generation and reference-image editing for this provider. Custom request scripts must set their own parameters. Keep /api/plan/v3 for Agent Plan; add models manually if fetching the list is unavailable.",
             arkWatermark: "Add AI-generated watermark",
-            arkSizeHint: "For Seedream 5.0 lite / 4.5, select 2K in image settings; 1K is unsupported. For 5.0 pro, select 1K / 2K. Dimensions must meet the selected model's requirements.",
+            arkSizeHint: "Image settings offer resolution and aspect ratio presets for recognized Seedream models and validate dimensions before generation. Check existing dimensions after switching models.",
             arkOutputFormat: "Output format",
             arkModelDefault: "Model default",
             arkOutputFormatHint: "Explicit formats are supported by Seedream 5.0 pro / lite only.",
