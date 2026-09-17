@@ -1,7 +1,7 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, defaultArkImageOptions, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -242,9 +242,9 @@ function supportsGeminiImageSize(model: string) {
     return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro");
 }
 
-function resolveImageSource(item: Record<string, unknown>) {
+function resolveImageSource(item: Record<string, unknown>, fallbackFormat = "png") {
     if (typeof item.b64_json === "string" && item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
+        return `data:image/${item.output_format === "png" || item.output_format === "jpeg" ? item.output_format : fallbackFormat};base64,${item.b64_json}`;
     }
     if (typeof item.url === "string" && item.url) {
         return item.url;
@@ -252,7 +252,7 @@ function resolveImageSource(item: Record<string, unknown>) {
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+function parseImagePayload(payload: ImageApiResponse, fallbackFormat = "png") {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || apiText("requestFailed"));
     }
@@ -262,7 +262,7 @@ function parseImagePayload(payload: ImageApiResponse) {
         || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
         || [];
     const images = imageList
-        .map(resolveImageSource)
+        .map((item) => resolveImageSource(item, fallbackFormat))
         .filter((value): value is string => Boolean(value))
         .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
@@ -723,6 +723,28 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
+async function requestArkImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
+    const { watermark, outputFormat, promptMode } = config.arkImageOptions || defaultArkImageOptions;
+    const size = resolveRequestSize(normalizeQuality(config.quality), config.size);
+    const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const body = {
+        model: config.model,
+        prompt: withSystemPrompt(config, prompt),
+        watermark,
+        response_format: "b64_json",
+        ...(size ? { size } : {}),
+        ...(images.length ? { image: images } : {}),
+        ...(outputFormat !== "auto" ? { output_format: outputFormat } : {}),
+        ...(promptMode !== "auto" ? { optimize_prompt_options: { mode: promptMode } } : {}),
+        ...(normalizeBackground(config.background) ? { background: "transparent" } : {}),
+    };
+    const results = await Promise.all(Array.from({ length: count }, async () => {
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
+        return parseImagePayload(response.data, outputFormat === "png" || config.background === "transparent" ? "png" : "jpeg");
+    }));
+    return results.flat();
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -742,6 +764,13 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+    if (requestConfig.apiFormat === "ark") {
+        try {
+            return await requestArkImages(requestConfig, prompt, [], n, options);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -804,6 +833,13 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+    if (requestConfig.apiFormat === "ark") {
+        try {
+            return await requestArkImages(requestConfig, requestPrompt, references, n, options);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }

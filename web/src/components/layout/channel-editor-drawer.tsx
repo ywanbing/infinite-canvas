@@ -1,9 +1,9 @@
-import { Button, Drawer, Input, Segmented, Select, Space } from "antd";
+import { Button, Drawer, Input, Segmented, Select, Space, Switch } from "antd";
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { defaultArkImageOptions, defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ArkImageOptions, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
@@ -17,6 +17,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
         { label: "OpenAI", value: "openai" },
         { label: "Gemini", value: "gemini" },
+        { label: t("config.channelEditor.ark"), value: "ark" },
     ];
     const capabilityOptions: Array<{ label: string; value: ModelCapability }> = ["image", "video", "text", "audio"].map((value) => ({ label: t(`config.channelEditor.capabilities.${value}`), value: value as ModelCapability }));
 
@@ -27,6 +28,8 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     if (!draft) return null;
 
     const patch = (value: Partial<ModelChannel>) => setDraft((current) => (current ? { ...current, ...value } : current));
+    const arkOptions = draft.arkImageOptions || defaultArkImageOptions;
+    const patchArkOptions = (value: Partial<ArkImageOptions>) => patch({ arkImageOptions: { ...arkOptions, ...value } });
     const setModels = (models: ChannelModel[]) => patch({ models });
 
     const changeApiFormat = (apiFormat: ApiCallFormat) => {
@@ -82,6 +85,33 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
                 </label>
             </div>
+
+            {draft.apiFormat === "ark" && (
+                <div className="mt-6 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-semibold">{t("config.channelEditor.arkImageOptions")}</span>
+                        <a href="https://docs.volcengine.com/docs/82379/1541523?lang=zh" target="_blank" rel="noreferrer" className="text-xs">{t("config.channelEditor.arkDocs")}</a>
+                    </div>
+                    <div className="text-xs opacity-60">{t("config.channelEditor.arkHint")}</div>
+                    <div className="text-xs opacity-60">{t("config.channelEditor.arkSizeHint")}</div>
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm">{t("config.channelEditor.arkWatermark")}</span>
+                        <Switch aria-label={t("config.channelEditor.arkWatermark")} checked={arkOptions.watermark} onChange={(watermark) => patchArkOptions({ watermark })} />
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <span className="mb-1 block text-sm">{t("config.channelEditor.arkOutputFormat")}</span>
+                            <Select className="w-full" aria-label={t("config.channelEditor.arkOutputFormat")} value={arkOptions.outputFormat} onChange={(outputFormat) => patchArkOptions({ outputFormat })} options={[{ value: "auto", label: t("config.channelEditor.arkModelDefault") }, { value: "png", label: "PNG" }, { value: "jpeg", label: "JPEG" }]} />
+                            <div className="mt-1 text-xs opacity-60">{t("config.channelEditor.arkOutputFormatHint")}</div>
+                        </div>
+                        <div>
+                            <span className="mb-1 block text-sm">{t("config.channelEditor.arkPromptMode")}</span>
+                            <Select className="w-full" aria-label={t("config.channelEditor.arkPromptMode")} value={arkOptions.promptMode} onChange={(promptMode) => patchArkOptions({ promptMode })} options={[{ value: "auto", label: t("config.channelEditor.arkModelDefault") }, { value: "standard", label: t("config.channelEditor.arkStandard") }, { value: "fast", label: t("config.channelEditor.arkFast") }]} />
+                            <div className="mt-1 text-xs opacity-60">{t("config.channelEditor.arkPromptModeHint")}</div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="mt-6 mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>

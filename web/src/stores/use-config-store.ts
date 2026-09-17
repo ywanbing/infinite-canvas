@@ -5,7 +5,7 @@ import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
 
-export type ApiCallFormat = "openai" | "gemini";
+export type ApiCallFormat = "openai" | "gemini" | "ark";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
@@ -15,6 +15,14 @@ export type ChannelModel = {
     script?: string;
 };
 
+export type ArkImageOptions = {
+    watermark: boolean;
+    outputFormat: "auto" | "png" | "jpeg";
+    promptMode: "auto" | "standard" | "fast";
+};
+
+export const defaultArkImageOptions: ArkImageOptions = { watermark: false, outputFormat: "auto", promptMode: "auto" };
+
 export type ModelChannel = {
     id: string;
     name: string;
@@ -22,6 +30,7 @@ export type ModelChannel = {
     apiKey: string;
     apiFormat: ApiCallFormat;
     models: ChannelModel[];
+    arkImageOptions?: ArkImageOptions;
 };
 
 export type AiConfig = {
@@ -54,6 +63,7 @@ export type AiConfig = {
     canvasImageCount: string;
     proxyEnabled: boolean;
     proxyUrl: string;
+    arkImageOptions?: ArkImageOptions;
 };
 
 export type WebdavSyncConfig = {
@@ -309,6 +319,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         apiKey: channel?.apiKey || "",
         apiFormat,
         models: normalizeChannelModels(channel?.models),
+        arkImageOptions: channel?.arkImageOptions,
     };
 }
 
@@ -432,6 +443,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
+        arkImageOptions: channel.arkImageOptions,
     };
 }
 
@@ -462,11 +474,12 @@ function normalizeChannels(config: AiConfig) {
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
     if (apiFormat === "gemini") return GEMINI_BASE_URL;
+    if (apiFormat === "ark") return "https://ark.cn-beijing.volces.com/api/v3";
     return OPENAI_BASE_URL;
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" ? apiFormat : "openai";
+    return apiFormat === "gemini" || apiFormat === "ark" ? apiFormat : "openai";
 }
 
 function uniqueModelOptions(models: string[]) {
@@ -475,8 +488,7 @@ function uniqueModelOptions(models: string[]) {
 
 export function buildApiUrl(baseUrl: string, path: string) {
     const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-    const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    const apiBaseUrl = /\/v\d+$/i.test(normalizedBaseUrl) ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return withLocalProxy(`${apiBaseUrl}${path}`);
 }
 

@@ -17,6 +17,8 @@ bun run dev
 
 Open `http://localhost:3000`, then enter your `Base URL`, `API Key`, and model names in Settings. Prompt sources and WebDAV are also accessed directly by the browser.
 
+`bun run dev` (or `npm run dev`) also starts the local Canvas Proxy at `http://127.0.0.1:23210`. Enable **Settings → Local proxy** to route requests through it when a provider blocks browser requests with CORS. Press `Ctrl+C` to stop both services. If either process exits, the other stops too; stop an existing proxy before starting this command if its port is already occupied.
+
 ## Start the documentation site
 
 ```bash

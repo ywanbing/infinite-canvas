@@ -74,6 +74,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     const script = resolveModelScript(config, selectedModel);
     if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
+    if (requestConfig.apiFormat === "ark") throw new Error(i18n.t("config.channelEditor.arkCustomScriptRequired", { capability: i18n.t("config.channelEditor.capabilities.video") }));
     assertVideoConfig(requestConfig, requestConfig.model);
     if (requestConfig.apiFormat === "gemini") return createGeminiVideoTask(requestConfig, selectedModel, prompt, references, options);
     return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, options);
