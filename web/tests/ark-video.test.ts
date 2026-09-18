@@ -43,11 +43,11 @@ test("registers seven models and resolves active Agent Plan aliases", () => {
     expect(resolveArkVideoModel("doubao-seedance-2-0-mini-260615")?.resolutions).toEqual(["480", "720"]);
 });
 
-test("Agent Plan preserves active aliases, accepts standard model IDs and rejects retired 1.5", async () => {
+test("Agent Plan maps active aliases, accepts standard model IDs and rejects retired 1.5", async () => {
     const input = { ...config("doubao-seedance-2.0"), vquality: "4k" };
     input.channels[0].arkAccessMode = "agent-plan";
     await createVideoGenerationTask(input, "海浪");
-    expect(post.mock.calls[0][1]).toHaveProperty("model", "doubao-seedance-2.0");
+    expect(post.mock.calls[0][1]).toHaveProperty("model", "doubao-seedance-2-0-260128");
     input.model = "ark-video::doubao-seedance-2-0-260128";
     input.channels[0].models[0].name = "doubao-seedance-2-0-260128";
     await createVideoGenerationTask(input, "海浪");
@@ -55,11 +55,28 @@ test("Agent Plan preserves active aliases, accepts standard model IDs and reject
     input.model = "ark-video::doubao-seedance-2.5";
     input.channels[0].models[0].name = "doubao-seedance-2.5";
     await createVideoGenerationTask({ ...input, vquality: "720", videoSeconds: "-1" }, "海浪");
-    expect(post.mock.calls[2][1]).toHaveProperty("model", "doubao-seedance-2.5");
+    expect(post.mock.calls[2][1]).toHaveProperty("model", "doubao-seedance-2-5-260628");
     const retired = { ...config("doubao-seedance-1.5-pro-即将下线"), vquality: "720" };
     retired.channels[0].arkAccessMode = "agent-plan";
     await expect(createVideoGenerationTask(retired, "海浪")).rejects.toThrow("已从 Agent Plan 下线");
     expect(post).toHaveBeenCalledTimes(3);
+});
+
+test.each(arkVideoModels)("maps $modelId display names to matching parameters and request IDs", async (profile) => {
+    const alias = profile.modelPrefix.replace(/-(\d+)-(\d+)/, "-$1.$2").replace("doubao-seedance", "Doubao-Seedance");
+    const input = { ...config(alias), size: profile.defaultRatio, vquality: profile.defaultResolution, videoSeconds: String(profile.duration.default) };
+    expect(resolveArkVideoModel(alias)).toBe(profile);
+    expect(resolveArkVideoModel(profile.modelPrefix)).toBe(profile);
+    const task = await createVideoGenerationTask(input, "海浪");
+    expect(post.mock.calls[0][1]).toMatchObject({ model: profile.modelId, resolution: `${profile.defaultResolution}p`, ratio: profile.defaultRatio, duration: profile.duration.default });
+    expect(task.model).toBe(input.model);
+});
+
+test("validates fast alias parameters and preserves explicit model versions", async () => {
+    await expect(createVideoGenerationTask({ ...config("Doubao-Seedance-2.0-fast"), vquality: "1080" }, "海浪")).rejects.toThrow("分辨率");
+    expect(post).not.toHaveBeenCalled();
+    await createVideoGenerationTask(config("doubao-seedance-2-0-260129"), "海浪");
+    expect(post.mock.calls[0][1]).toHaveProperty("model", "doubao-seedance-2-0-260129");
 });
 
 test("preserves reference roles, remote sources, 4k and smart duration", async () => {

@@ -4,7 +4,7 @@ import axios from "axios";
 
 const { createModelChannel, defaultConfig, resolveModelRequestConfig, useConfigStore } = await import("../src/stores/use-config-store");
 const { requestGeneration, requestEdit } = await import("../src/services/api/image");
-const { computeModelImageSize, getImageModelConfig, imageModelConfigs, modelImageSizeError, readModelImageSize, resolveModelImageSize } = await import("../src/lib/image-model-config");
+const { computeModelImageSize, getImageModelConfig, imageModelConfigs, modelImageSizeError, readModelImageSize, resolveArkImageModelId, resolveModelImageSize } = await import("../src/lib/image-model-config");
 
 function config(apiFormat: "ark" | "openai" = "ark") {
     return {
@@ -60,6 +60,14 @@ describe("Ark image requests", () => {
     test("does not apply Ark rules to other protocols or unknown models", () => {
         expect(getImageModelConfig("openai", "doubao-seedream-5.0-lite")).toBeUndefined();
         expect(getImageModelConfig("ark", "unknown-model")).toBeUndefined();
+    });
+
+    test("maps Seedream display names to the official Ark model IDs", () => {
+        expect(resolveArkImageModelId("Doubao-Seedream-5.0-pro")).toBe("doubao-seedream-5-0-pro-260628");
+        expect(resolveArkImageModelId("doubao-seedream-5-0-260128")).toBe("doubao-seedream-5-0-260128");
+        expect(getImageModelConfig("ark", "Doubao-Seedream-5.0-pro")?.name).toBe("Seedream 5.0 pro");
+        expect(getImageModelConfig("ark", "doubao-seedream-5-0-260128")?.name).toBe("Seedream 5.0 lite");
+        expect(getImageModelConfig("ark", "doubao-seedream-4-5-251128")?.name).toBe("Seedream 4.5");
     });
 
     test("selecting a resolution after switching models uses the standard ratio preset", () => {
@@ -130,7 +138,7 @@ describe("Ark image requests", () => {
         await requestGeneration(input, "a poster");
         const [url, body] = post.mock.calls[0];
         expect(url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/images/generations");
-        expect(body).toEqual({ model: "doubao-seedream-5.0-pro", prompt: "a poster", size: "1024x1024", watermark: false, response_format: "b64_json" });
+        expect(body).toEqual({ model: "doubao-seedream-5-0-pro-260628", prompt: "a poster", size: "1024x1024", watermark: false, response_format: "b64_json" });
     });
 
     test("sends selected channel options at the top level and decodes JPEG responses", async () => {

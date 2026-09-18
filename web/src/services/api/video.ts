@@ -4,7 +4,7 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { dataUrlToFile, getDataUrlByteSize, readFileAsDataUrl } from "@/lib/image-utils";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
-import { resolveArkVideoModel, validateArkVideoSettings, type ArkVideoMode, type ArkVideoModel } from "@/lib/video-model-config";
+import { resolveArkVideoModel, resolveArkVideoModelId, validateArkVideoSettings, type ArkVideoMode, type ArkVideoModel } from "@/lib/video-model-config";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
@@ -200,7 +200,7 @@ async function createArkVideoTask(config: AiConfig, model: string, prompt: strin
         content.push({ type: "audio_url", audio_url: { url }, role: "reference_audio" });
     }
     const body = {
-        model: config.model === profile.modelPrefix ? profile.modelId : config.model, content,
+        model: resolveArkVideoModelId(config.model), content,
         resolution: config.vquality === "4k" ? "4k" : `${config.vquality}p`, ratio: config.size, duration: Number(config.videoSeconds),
         watermark: boolConfig(config.videoWatermark, false),
         ...(profile.supportsAudio ? { generate_audio: boolConfig(config.videoGenerateAudio, true) } : {}),

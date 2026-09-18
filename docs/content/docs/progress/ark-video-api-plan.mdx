@@ -37,7 +37,7 @@ description: Seedance 视频任务接入与模型能力驱动的参数选择方�
 
 只有 Ark 渠道保存 `arkAccessMode`：标准 API `api`、Agent Plan `agent-plan`。默认 Base URL 分别为 `https://ark.cn-beijing.volces.com/api/v3`、`https://ark.cn-beijing.volces.com/api/plan/v3`。切换方式更新默认地址，保留自定义地址和已配模型。
 
-接入方式区域不再提供独立模型目录。所有模型统一在渠道模型列表中获取或手动配置，Agent Plan 不根据接入方式过滤视觉模型。已知 Agent Plan Seedance 别名（例如 `doubao-seedance-2.5`、`doubao-seedance-2.0-fast`）与标准 API Model ID 共用对应能力配置，请求始终发送渠道中配置的原始模型名。已从 Agent Plan 下线的 Seedance 1.5 Pro 会在提交前明确拒绝；标准 API 仍按其独立 Model ID 解析。Agent Plan 视频路由依据[视觉模型接入文档](https://docs.volcengine.com/docs/82379/2375486)使用 `/api/plan/v3/contents/generations/tasks`。
+接入方式区域不再提供独立模型目录。所有模型统一在渠道模型列表中获取或手动配置，Agent Plan 不根据接入方式过滤视觉模型。Seedance 展示名（例如 `Doubao-Seedance-2.5`、`doubao-seedance-2.0-fast`）、无版本名称与标准 API Model ID 在两种接入方式下共用对应能力配置；内置请求将展示名和无版本名称映射到参数表中的官方 Model ID，显式配置日期版本时保留该版本，任务记录和自定义脚本保留原渠道模型名。已从 Agent Plan 下线的 Seedance 1.5 Pro 会在提交前明确拒绝；标准 API 仍按其独立 Model ID 解析。Agent Plan 视频路由依据[视觉模型接入文档](https://docs.volcengine.com/docs/82379/2375486)使用 `/api/plan/v3/contents/generations/tasks`。
 
 型号能力在 `web/src/lib/video-model-config.ts` 硬编码，接入地址在 `web/src/lib/ark-channel-config.ts`。为减少重复状态，2.5 的参考、编辑、延长直接使用 `videoMode=reference/edit/extend`，不再单独增加 `videoReferenceTask`。面板展示分辨率和比例，不推算可能失真的 W/H。默认值由“使用模型默认值”显式应用，切换型号不覆盖用户参数。
 

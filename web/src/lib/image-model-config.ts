@@ -20,6 +20,24 @@ const seedream3k = { "1:1": "3072x3072", "4:3": "3456x2592", "3:4": "2592x3456",
 const seedream4k = { "1:1": "4096x4096", "4:3": "4704x3520", "3:4": "3520x4704", "16:9": "5504x3040", "9:16": "3040x5504", "3:2": "4992x3328", "2:3": "3328x4992", "21:9": "6240x2656" };
 const seedreamDefaults = { apiFormat: "ark", defaultScale: "2k", minPixels: 3686400, maxPixels: 16777216, maxRatio: 16 };
 
+// 控制台展示名与图片 API 的 Model ID 不完全相同，内置请求必须发送后者。
+const arkImageModelAliases: Record<string, string> = {
+    "doubao-seedream-5.0-pro": "doubao-seedream-5-0-pro-260628",
+    "doubao-seedream-5-0-pro": "doubao-seedream-5-0-pro-260628",
+    "doubao-seedream-5.0-lite": "doubao-seedream-5-0-260128",
+    "doubao-seedream-5-0-lite": "doubao-seedream-5-0-260128",
+    "doubao-seedream-5.0": "doubao-seedream-5-0-260128",
+    "doubao-seedream-5-0": "doubao-seedream-5-0-260128",
+    "doubao-seedream-4.5": "doubao-seedream-4-5-251128",
+    "doubao-seedream-4-0": "doubao-seedream-4-0-250828",
+    "doubao-seedream-4.0": "doubao-seedream-4-0-250828",
+};
+
+export function resolveArkImageModelId(model: string) {
+    const value = model.trim();
+    return arkImageModelAliases[value.toLowerCase()] || value;
+}
+
 // 新模型在这里配置匹配规则、分辨率预设和尺寸范围，面板与请求层共用。
 export const imageModelConfigs: ImageModelConfig[] = [
     {
@@ -34,7 +52,7 @@ export const imageModelConfigs: ImageModelConfig[] = [
             "2k": { "1:1": "2048x2048", "4:3": "2368x1776", "3:4": "1776x2368", "16:9": "2816x1584", "9:16": "1584x2816", "3:2": "2496x1664", "2:3": "1664x2496", "21:9": "3136x1344" },
         },
     },
-    { ...seedreamDefaults, name: "Seedream 5.0 lite", model: /^doubao-seedream-5[.-]0-lite(?:-|$)/i, presets: { "2k": seedream2k, "3k": seedream3k, "4k": seedream4k } },
+    { ...seedreamDefaults, name: "Seedream 5.0 lite", model: /^doubao-seedream-5[.-]0(?:-lite|-(?:\d{6}))(?:-|$)/i, presets: { "2k": seedream2k, "3k": seedream3k, "4k": seedream4k } },
     { ...seedreamDefaults, name: "Seedream 4.5", model: /^doubao-seedream-4[.-]5(?:-|$)/i, presets: { "2k": seedream2k, "4k": seedream4k } },
     { ...seedreamDefaults, name: "Seedream 4.0", model: /^doubao-seedream-4[.-]0(?:-|$)/i, minPixels: 921600, presets: { "1k": seedream1k, "2k": seedream2k, "4k": seedream4k } },
 ];
@@ -43,7 +61,9 @@ const presetRatios = new Map([imageSizePresets, ...imageModelConfigs.map((config
     .flatMap((presets) => Object.values(presets).flatMap((ratios) => Object.entries(ratios).map(([ratio, size]) => [size, ratio] as const))));
 
 export function getImageModelConfig(apiFormat: string, model: string) {
-    return imageModelConfigs.find((config) => config.apiFormat === apiFormat && config.model.test(model.trim()));
+    const value = model.trim();
+    const normalized = apiFormat === "ark" ? resolveArkImageModelId(value) : value;
+    return imageModelConfigs.find((config) => config.apiFormat === apiFormat && (config.model.test(value) || config.model.test(normalized)));
 }
 
 function sizeError(key: string, config: ImageModelConfig, values?: Record<string, unknown>) {

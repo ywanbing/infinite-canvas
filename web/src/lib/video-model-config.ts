@@ -55,22 +55,18 @@ export const arkVideoModels: ArkVideoModel[] = definitions.map(([name, modelId, 
     };
 });
 
-const agentPlanAliases: Record<string, string> = {
-    "doubao-seedance-2.5": "doubao-seedance-2-5-260628",
-    "doubao-seedance-2.0": "doubao-seedance-2-0-260128",
-    "doubao-seedance-2.0-fast": "doubao-seedance-2-0-fast-260128",
-    "doubao-seedance-2.0-mini": "doubao-seedance-2-0-mini-260615",
-    "doubao-seedance-1.0-pro": "doubao-seedance-1-0-pro-250528",
-    "doubao-seedance-1.0-pro-fast": "doubao-seedance-1-0-pro-fast-251015",
-};
+// 展示名和无版本名称使用参数表中的 Model ID；显式版本不替换为默认版本。
+export function resolveArkVideoModelId(name: string) {
+    const id = modelOptionName(name).trim().toLowerCase().replace(/^(doubao-seedance-\d+)\.(\d+)(?=-|$)/, "$1-$2");
+    return arkVideoModels.find((model) => id === model.modelPrefix)?.modelId || id;
+}
 
 const retiredAgentPlanModel = /^doubao-seedance-1(?:\.5|-5)-pro(?:-\d{6}|-即将下线)?$/i;
 
 export function resolveArkVideoModel(name: string, accessMode?: string) {
-    const id = modelOptionName(name).trim();
+    const id = resolveArkVideoModelId(name);
     if (accessMode === "agent-plan" && retiredAgentPlanModel.test(id)) return undefined;
-    const resolvedId = accessMode === "agent-plan" ? agentPlanAliases[id] || id : id;
-    return arkVideoModels.find((model) => resolvedId === model.modelId || resolvedId === model.modelPrefix || (resolvedId.startsWith(`${model.modelPrefix}-`) && /^\d{6}$/.test(resolvedId.slice(model.modelPrefix.length + 1))));
+    return arkVideoModels.find((model) => id === model.modelId || (id.startsWith(`${model.modelPrefix}-`) && /^\d{6}$/.test(id.slice(model.modelPrefix.length + 1))));
 }
 
 export function getArkVideoCapabilities(config: AiConfig) {

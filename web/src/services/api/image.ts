@@ -8,7 +8,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
-import { getImageModelConfig, resolveModelImageSize } from "@/lib/image-model-config";
+import { getImageModelConfig, resolveArkImageModelId, resolveModelImageSize } from "@/lib/image-model-config";
 import type { ReferenceImage } from "@/types/image";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
@@ -734,7 +734,7 @@ async function requestArkImages(config: AiConfig, prompt: string, references: Re
     const size = resolveConfigImageSize(config);
     const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
     const body = {
-        model: config.model,
+        model: resolveArkImageModelId(config.model),
         prompt: withSystemPrompt(config, prompt),
         watermark,
         response_format: "b64_json",
