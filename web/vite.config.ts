@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 import { parseChangelog } from "./src/lib/release";
 
@@ -40,7 +41,7 @@ function localPluginsManifest(): Plugin {
 
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
-    plugins: [react(), localPluginsManifest()],
+    plugins: [react(), localPluginsManifest(), nodePolyfills({ include: ["buffer", "util", "process"] })],
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),
