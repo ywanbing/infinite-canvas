@@ -4,14 +4,17 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { arkAccessConfig, type ArkAccessMode } from "@/lib/ark-channel-config";
+import { arkAccessConfig, type ArkAccessMode, type ArkAssetConfig } from "@/lib/ark-channel-config";
+import { defaultKexiangChannel, defaultKexiangModels } from "@/lib/kexiang-models";
+import { defaultObjectStorageConfig, s3Providers, type ObjectStorageConfig, type ObjectStorageProfiles } from "@/services/api/s3/config";
 
-export type ApiCallFormat = "openai" | "gemini" | "ark";
+export type ApiCallFormat = "openai" | "gemini" | "ark" | "kexiang";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
 export type ChannelModel = {
     name: string;
+    modelId?: string;
     capability: ModelCapability;
     script?: string;
 };
@@ -33,6 +36,7 @@ export type ModelChannel = {
     models: ChannelModel[];
     arkImageOptions?: ArkImageOptions;
     arkAccessMode?: ArkAccessMode;
+    arkAssets?: ArkAssetConfig;
 };
 
 export type AiConfig = {
@@ -76,7 +80,7 @@ export type WebdavSyncConfig = {
     directory: string;
     lastSyncedAt: string;
 };
-export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "object-storage" | "local-storage";
 
 export type ChannelCredentialsImportResult = {
     status: "created" | "updated" | "missing-base-url" | "invalid-base-url";
@@ -147,6 +151,9 @@ export const defaultWebdavSyncConfig: WebdavSyncConfig = {
 type ConfigStore = {
     config: AiConfig;
     webdav: WebdavSyncConfig;
+    objectStorage: ObjectStorageConfig;
+    objectStorageProfiles: ObjectStorageProfiles;
+    updateObjectStorageConfig: <K extends keyof ObjectStorageConfig>(key: K, value: ObjectStorageConfig[K]) => void;
     isConfigOpen: boolean;
     configTab: ConfigTabKey;
     shouldPromptContinue: boolean;
@@ -221,6 +228,23 @@ export const useConfigStore = create<ConfigStore>()(
         (set, get) => ({
             config: defaultConfig,
             webdav: defaultWebdavSyncConfig,
+            objectStorage: defaultObjectStorageConfig,
+            objectStorageProfiles: {},
+            updateObjectStorageConfig: (key, value) => set((state) => {
+                const objectStorage = { ...state.objectStorage, [key]: value };
+                if (key === "provider" && objectStorage.provider !== state.objectStorage.provider) {
+                    const provider = s3Providers[objectStorage.provider];
+                    const saved = state.objectStorageProfiles[objectStorage.provider];
+                    // The active config stays in objectStorage; retain the other providers here.
+                    const objectStorageProfiles = { ...state.objectStorageProfiles, [state.objectStorage.provider]: state.objectStorage };
+                    delete objectStorageProfiles[objectStorage.provider];
+                    return {
+                        objectStorage: { ...defaultObjectStorageConfig, region: provider.defaultRegion, forcePathStyle: provider.forcePathStyle ?? true, ...saved, enabled: objectStorage.enabled, provider: objectStorage.provider },
+                        objectStorageProfiles,
+                    };
+                }
+                return { objectStorage };
+            }),
             isConfigOpen: false,
             configTab: "channels",
             shouldPromptContinue: false,
@@ -251,7 +275,7 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
+            partialize: (state) => ({ config: state.config, webdav: state.webdav, objectStorage: state.objectStorage, objectStorageProfiles: state.objectStorageProfiles }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
@@ -263,6 +287,8 @@ export const useConfigStore = create<ConfigStore>()(
                 return {
                     ...current,
                     webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
+                    objectStorage: { ...defaultObjectStorageConfig, ...persistedState.objectStorage },
+                    objectStorageProfiles: { ...persistedState.objectStorageProfiles },
                     config: {
                         ...config,
                         channelMode: "local",
@@ -307,8 +333,9 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         if (!name || seen.has(name)) continue;
         seen.add(name);
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
+        const modelId = typeof item === "string" ? undefined : item.modelId?.trim() || undefined;
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, script });
+        result.push({ name, capability, ...(modelId ? { modelId } : {}), ...(script ? { script } : {}) });
     }
     return result;
 }
@@ -316,15 +343,18 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
     const arkAccessMode = apiFormat === "ark" ? arkAccessConfig(channel?.arkAccessMode).value : undefined;
+    const template = apiFormat === "kexiang" ? defaultKexiangChannel : undefined;
+    const models = channel?.models === undefined && template ? defaultKexiangModels() : normalizeChannelModels(channel?.models);
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || i18n.t("config.channels.newName"),
-        baseUrl: channel?.baseUrl?.trim() || (apiFormat === "ark" ? arkAccessConfig(arkAccessMode).baseUrl : defaultBaseUrlForApiFormat(apiFormat)),
+        baseUrl: channel?.baseUrl?.trim() || (apiFormat === "ark" ? arkAccessConfig(arkAccessMode).baseUrl : template?.baseUrl || defaultBaseUrlForApiFormat(apiFormat)),
         apiKey: channel?.apiKey || "",
         apiFormat,
-        models: normalizeChannelModels(channel?.models),
+        models,
         arkImageOptions: channel?.arkImageOptions,
         arkAccessMode,
+        arkAssets: channel?.arkAssets,
     };
 }
 
@@ -441,10 +471,12 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
-    const channel = resolveModelChannel(config, value);
+    const selectedValue = value || config.model;
+    const channel = resolveModelChannel(config, selectedValue);
+    const selected = findChannelModel(config, selectedValue)?.model;
     return {
         ...config,
-        model: modelOptionName(value || config.model),
+        model: selected?.modelId?.trim() || modelOptionName(selectedValue),
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
@@ -481,11 +513,12 @@ function normalizeChannels(config: AiConfig) {
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
     if (apiFormat === "gemini") return GEMINI_BASE_URL;
     if (apiFormat === "ark") return "https://ark.cn-beijing.volces.com/api/v3";
+    if (apiFormat === "kexiang") return defaultKexiangChannel.baseUrl;
     return OPENAI_BASE_URL;
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" || apiFormat === "ark" ? apiFormat : "openai";
+    return apiFormat === "gemini" || apiFormat === "ark" || apiFormat === "kexiang" ? apiFormat : "openai";
 }
 
 function uniqueModelOptions(models: string[]) {

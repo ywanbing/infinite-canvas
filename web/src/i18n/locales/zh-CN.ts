@@ -379,14 +379,15 @@ export default {
     config: {
         title: "配置与用户偏好",
         invalidFile: "配置文件格式不正确",
-        description: "渠道聚合、模型选择、同步与本地存储",
-        modalDescription: "渠道聚合、默认模型、同步与本地存储",
+        description: "渠道聚合、模型选择、同步与存储",
+        modalDescription: "渠道聚合、默认模型、同步与存储",
         tabs: {
             channels: "渠道",
             localProxy: "本地代理",
             preferences: "偏好设置",
             promptSources: "提示词来源",
             localStorage: "本地存储",
+            objectStorage: "对象存储",
         },
         proxy: {
             title: "本地代理",
@@ -473,7 +474,7 @@ export default {
             },
             runtime: { requestFailed: "请求失败（{{status}}）", urlRequired: "JSON URL 不能为空", fetchFailed: "「{{name}}」拉取失败：{{error}}", noPrompts: "「{{name}}」未解析到有效提示词", invalidRoot: "「{{name}}」格式错误：根节点必须是数组" },
         },
-        fileSecurity: "JSON 文件包含 API Key 和 WebDAV 凭据，请妥善保管。",
+        fileSecurity: "JSON 文件包含 API Key、WebDAV 和对象存储凭据，请妥善保管。",
         import: "导入配置",
         export: "导出配置",
         imported: "配置与用户偏好已导入",
