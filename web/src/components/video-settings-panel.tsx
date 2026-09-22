@@ -8,6 +8,7 @@ import { type CanvasTheme } from "@/lib/canvas-theme";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio, parseVideoResolution, readVideoDimensions, VIDEO_SECONDS_MAX, VIDEO_SECONDS_MIN, videoRatioOptions } from "@/lib/media-size";
 import { resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { getArkVideoCapabilities, validateArkVideoSettings, type ArkVideoMode } from "@/lib/video-model-config";
+import { kexiangVideoModeLabels, resolveKexiangModelRequest, validateKexiangVideoMode, type KexiangVideoMode } from "@/lib/kexiang-models";
 
 const resolutionOptions = [
     { value: "480", label: "480p" },
@@ -34,6 +35,9 @@ type VideoSettingsPanelProps = {
 export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
     const { t } = useTranslation();
     const request = resolveModelRequestConfig(config, config.model);
+    const kexiang = request.apiFormat === "kexiang" && !resolveModelScript(config, config.model);
+    const modelSettings = kexiang ? resolveKexiangModelRequest(request.model) : undefined;
+    const modeError = kexiang ? validateKexiangVideoMode(request.model, config.videoMode) : "";
     const seconds = Number(clampVideoSeconds(config.videoSeconds || "6"));
     const videoMode = normalizeVideoModeValue(config.videoMode);
     const resolution = parseVideoResolution(config.vquality);
@@ -56,7 +60,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 {showTitle ? <div className="text-lg font-semibold">{t("settingsPanels.video.title")}</div> : null}
                 <SettingGroup title={t("settingsPanels.video.quality")} color={theme.node.muted}>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {resolutionOptions.map((item) => (
+                        {(modelSettings?.resolutions || resolutionOptions).map((item) => (
                             <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => selectResolution(item.value)}>
                                 {item.label}
                             </OptionPill>
@@ -97,12 +101,18 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 </SettingGroup>
                 <SettingGroup title={t("settingsPanels.video.mode")} color={theme.node.muted}>
                     <div className="grid grid-cols-2 gap-2.5">
-                        {videoModeOptions.map((item) => (
+                        {kexiang ? modelSettings?.videoModes?.map((value) => (
+                            <OptionPill key={value} selected={config.videoMode === value} theme={theme} onClick={() => onConfigChange("videoMode", value)}>
+                                {kexiangVideoModeLabels[value]}
+                            </OptionPill>
+                        )) : videoModeOptions.map((item) => (
                             <OptionPill key={item.value} selected={videoMode === item.value} theme={theme} onClick={() => onConfigChange("videoMode", item.value)}>
                                 {t(`settingsPanels.video.modes.${item.labelKey}`)}
                             </OptionPill>
                         ))}
                     </div>
+                    {modeError && <div role="alert" className="text-xs leading-5">{modeError}</div>}
+                    {kexiang && config.videoMode === "frame2video" && <div className="text-xs" style={{ color: theme.node.muted }}>参考图片按首帧、尾帧顺序提交。</div>}
                 </SettingGroup>
             </div>
         </ImageSettingsTheme>
@@ -126,6 +136,7 @@ export function videoSecondsLabel(value: string) {
 }
 
 export function videoModeLabel(value: string) {
+    if (Object.hasOwn(kexiangVideoModeLabels, value)) return kexiangVideoModeLabels[value as KexiangVideoMode];
     if (value in arkModeLabels) return arkModeLabels[value as ArkVideoMode];
     return i18n.t(`settingsPanels.video.modes.${normalizeVideoModeValue(value)}`);
 }

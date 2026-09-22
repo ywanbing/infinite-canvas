@@ -10,6 +10,7 @@ export type ArkVideoModel = {
     ratios: Record<ArkVideoMode, string[]>;
     duration: { min: number; max: number; auto: boolean; default: number };
     supportsAudio: boolean;
+    supportsAssets: boolean;
     defaultResolution: string;
     defaultRatio: string;
     defaultMode: ArkVideoMode;
@@ -49,7 +50,7 @@ export const arkVideoModels: ArkVideoModel[] = definitions.map(([name, modelId, 
         name: `豆包 Seedance ${name}`, modelId, modelPrefix: modelId.replace(/-\d{6}$/, ""), modes, resolutions: [...resolutions],
         ratios: { text: legacy ? fixedRatios : allRatios, first_frame: newest ? ["adaptive"] : allRatios, first_last_frame: newest ? ["adaptive"] : allRatios, reference: allRatios, edit: ["adaptive"], extend: ["adaptive"] },
         duration: { min: legacy ? 2 : 4, max: newest ? 30 : omni ? 15 : 12, auto: !legacy, default: newest ? -1 : 6 },
-        supportsAudio: !legacy, defaultResolution: legacy ? "1080" : "720", defaultRatio: legacy ? "16:9" : "adaptive", defaultMode: "text",
+        supportsAudio: !legacy, supportsAssets: omni, defaultResolution: legacy ? "1080" : "720", defaultRatio: legacy ? "16:9" : "adaptive", defaultMode: "text",
         dimensions: Object.fromEntries(resolutions.map((resolution) => [resolution, legacy ? legacyDimensions[resolution as keyof typeof legacyDimensions] : newest && resolution === "480" ? { ...modernDimensions["480"], "16:9": "854x480", "9:16": "480x854" } : modernDimensions[resolution]])),
         mediaLimits: { images: newest ? 30 : omni ? 9 : 2, videos: newest ? 10 : omni ? 3 : 0, audios: newest ? 10 : omni ? 3 : 0, audioOnly: newest, minDuration: 2, maxDuration: newest ? 30 : 15, totalDuration: newest ? 30 : 15, imageBytes: 30 * 1024 ** 2, videoBytes: 200 * 1024 ** 2, audioBytes: 15 * 1024 ** 2 },
     };
