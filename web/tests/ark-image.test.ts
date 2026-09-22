@@ -135,10 +135,12 @@ describe("Ark image requests", () => {
     test("preserves the Ark channel and sends watermark false without OpenAI-only fields", async () => {
         const input = config();
         expect(input.channels[0].apiFormat).toBe("ark");
-        await requestGeneration(input, "a poster");
+        const images = await requestGeneration(input, "a poster");
         const [url, body] = post.mock.calls[0];
         expect(url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/images/generations");
-        expect(body).toEqual({ model: "doubao-seedream-5-0-pro-260628", prompt: "a poster", size: "1024x1024", watermark: false, response_format: "b64_json" });
+        expect(body).toEqual({ model: "doubao-seedream-5-0-pro-260628", prompt: "a poster", size: "1024x1024", watermark: false, response_format: "url" });
+        expect(images[0].mediaSource).toMatchObject({ id: images[0].id, origin: "ark", channelId: "ark-test", originalUrl: "https://example.com/image.png" });
+        expect(images[0].mediaSource?.generatedAt).toBeGreaterThan(0);
     });
 
     test("sends selected channel options at the top level and decodes JPEG responses", async () => {
@@ -186,13 +188,20 @@ describe("Ark image requests", () => {
     test("preserves custom script precedence", async () => {
         const input = config();
         input.channels[0].models[0].script = 'return ["https://example.com/script.png"];';
-        expect((await requestGeneration(input, "a poster"))[0].dataUrl).toBe("https://example.com/script.png");
+        const image = (await requestGeneration(input, "a poster"))[0];
+        expect(image.dataUrl).toBe("https://example.com/script.png");
+        expect(image.mediaSource?.origin).toBe("other");
         expect(post).not.toHaveBeenCalled();
     });
 
     test("surfaces upstream failures", async () => {
         post.mockRejectedValueOnce(new Error("Ark rejected this request"));
         await expect(requestGeneration(config(), "a poster")).rejects.toThrow("Ark rejected this request");
+    });
+
+    test("unknown models using Ark format do not gain native media exemption", async () => {
+        const image = (await requestGeneration(modelConfig("custom-image-model", "1024x1024"), "a poster"))[0];
+        expect(image.mediaSource?.origin).toBe("other");
     });
 
     test("does not send Ark parameters to OpenAI channels", async () => {

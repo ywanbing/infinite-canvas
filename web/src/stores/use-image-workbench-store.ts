@@ -5,18 +5,22 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { resolveModelChannel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
+import type { MediaSource } from "@/types/media-reference";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { deleteStoredImages, ensureImagePreview, resolveImageUrl, uploadImage } from "@/services/image-storage";
 
 export type GeneratedImage = {
     id: string;
     dataUrl: string;
+    url?: string;
+    urlExpiresAt?: number;
     storageKey?: string;
     durationMs: number;
     width: number;
     height: number;
     bytes: number;
     mimeType?: string;
+    mediaSource?: MediaSource;
     status?: "pending" | "failed";
     error?: string;
 };
@@ -98,7 +102,8 @@ async function runSlot(log: GenerationLog, slot: GeneratedImage, config: AiConfi
         const result = log.references.length ? await requestEdit(requestConfig, log.prompt, log.references) : await requestGeneration(requestConfig, log.prompt);
         if (!result[0]) throw new Error(i18n.t("imageWorkbench.missingResult"));
         const stored = await uploadImage(result[0].dataUrl);
-        next = { id: slot.id, dataUrl: stored.url, storageKey: stored.storageKey, durationMs: performance.now() - startedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+        const generated = result[0];
+        next = { id: slot.id, dataUrl: stored.url, url: generated.url, urlExpiresAt: generated.urlExpiresAt, storageKey: stored.storageKey, durationMs: performance.now() - startedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType, mediaSource: generated.mediaSource };
     } catch (error) {
         next = { ...slot, status: "failed", durationMs: performance.now() - startedAt, error: error instanceof Error ? error.message : i18n.t("workbench.generationFailed") };
     }

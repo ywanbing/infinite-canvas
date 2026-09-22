@@ -4,6 +4,8 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
+import { imageReferenceRemoteUrl } from "@/lib/image-reference-url";
+import type { ReferenceImage } from "@/types/image";
 
 export type UploadedImage = {
     url: string;
@@ -226,6 +228,15 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
     const url = image.dataUrl || (await resolveImageUrl(image.storageKey, image.url || ""));
     if (!url || url.startsWith("data:")) return url;
     return blobToDataUrl(await fetchImageBlob(url, options));
+}
+
+export async function videoReferenceImageUrl(image: ReferenceImage, options?: ImageReadOptions) {
+    const remoteUrl = imageReferenceRemoteUrl(image);
+    if (remoteUrl) return remoteUrl;
+    const fallback = /^https?:\/\//i.test(image.dataUrl) && image.urlExpiresAt !== undefined && image.urlExpiresAt <= Date.now() ? "" : image.dataUrl;
+    const dataUrl = await resolveImageUrl(image.storageKey, fallback);
+    if (!dataUrl) throw new Error(i18n.t("common.imageReadFailed"));
+    return imageToDataUrl({ dataUrl }, options);
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {

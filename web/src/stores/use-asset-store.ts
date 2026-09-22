@@ -5,11 +5,12 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import { cleanupUnusedImages, ensureImagePreview, previewUrlFor, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import type { MediaSource } from "@/types/media-reference";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
-export type ImageAsset = AssetBase<"image"> & { data: { dataUrl: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string } };
-export type VideoAsset = AssetBase<"video"> & { data: { url: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string } };
+export type ImageAsset = AssetBase<"image"> & { data: { dataUrl: string; url?: string; urlExpiresAt?: number; arkAssetSource?: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string; mediaSource?: MediaSource } };
+export type VideoAsset = AssetBase<"video"> & { data: { url: string; referenceUrl?: string; storageKey?: string; width: number; height: number; durationMs?: number; bytes: number; mimeType: string; mediaSource?: MediaSource } };
 export type Asset = TextAsset | ImageAsset | VideoAsset;
 
 type AssetBase<T extends AssetKind> = {

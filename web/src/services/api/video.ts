@@ -3,11 +3,15 @@ import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
 import { dataUrlToFile, getDataUrlByteSize, readFileAsDataUrl } from "@/lib/image-utils";
-import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
 import { resolveArkVideoModel, resolveArkVideoModelId, validateArkVideoSettings, type ArkVideoMode, type ArkVideoModel } from "@/lib/video-model-config";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
-import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, buildApiUrl, modelOptionName, resolveModelChannel, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
+import { prepareMediaReference } from "./media-reference-policy";
+import type { MediaSource } from "@/types/media-reference";
+import { createKexiangVideoTask, pollKexiangVideoTask } from "./kexiang/video";
+import { delay, readApiErrorMessage, readAxiosError } from "./request-utils";
+import { assertVideoBlob, isPublicMediaUrl, normalizeVideoResolution, normalizeVideoSeconds, normalizeVideoSize, videoAspectRatio, videoResultFromUrl } from "./video-common";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -16,11 +20,11 @@ type VideoResponse = { id: string; status?: string; error?: { message?: string }
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
-type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
+type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[]; onProgress?: (message: string) => void };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; sourceUrl?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "ark" | "plugin"; model: string; baseUrl?: string; arkAccessMode?: AiConfig["arkAccessMode"] };
+export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; sourceUrl?: string; mediaSource?: MediaSource };
+export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "ark" | "kexiang" | "plugin"; model: string; baseUrl?: string; arkAccessMode?: AiConfig["arkAccessMode"]; createdAt?: number };
 type GeminiInlineData = { bytesBase64Encoded: string; mimeType: string };
 type GeminiVideoOperation = {
     name?: string;
@@ -71,28 +75,50 @@ function videoTaskFailed(message: string) {
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+    const createdAt = Date.now();
+    return { ...await createVideoTask(config, prompt, references, options), createdAt };
+}
+
+async function createVideoTask(config: AiConfig, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     const selectedModel = (config.model || config.videoModel).trim();
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     const script = resolveModelScript(config, selectedModel);
     if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
     assertVideoConfig(requestConfig, requestConfig.model);
-    if (requestConfig.apiFormat === "ark") return createArkVideoTask(requestConfig, selectedModel, prompt, references, options);
+    if (requestConfig.apiFormat === "kexiang") return createKexiangVideoTask(requestConfig, selectedModel, prompt, references, options, { ...config, model: selectedModel });
+    if (requestConfig.apiFormat === "ark") return createArkVideoTask(requestConfig, selectedModel, prompt, references, options, { ...config, model: selectedModel });
     if (requestConfig.apiFormat === "gemini") return createGeminiVideoTask(requestConfig, selectedModel, prompt, references, options);
     return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, options);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    const state = await pollVideoTask(config, task, options);
+    if (state.status !== "completed") return state;
+    const originalUrl = state.result.sourceUrl || state.result.url;
+    return { ...state, result: { ...state.result, mediaSource: {
+        id: JSON.stringify([task.provider, task.baseUrl, task.model, task.id]),
+        origin: task.provider === "ark" && task.createdAt ? "ark" : "other",
+        channelId: resolveModelChannel(config, task.model).id, model: task.model,
+        generatedAt: task.createdAt, originalUrl,
+        // Download lifetime is independent of the 30-day provenance exemption.
+        urlExpiresAt: task.createdAt ? task.createdAt + 24 * 60 * 60 * 1000 : undefined,
+    } } };
+}
+
+async function pollVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     if (task.provider === "plugin") {
         const result = pluginVideoResults.get(task.id);
         return result ? { status: "completed", result } : { status: "failed", error: apiText("pluginVideoExpired") };
     }
-    if (task.provider === "ark" && task.model.includes("::") && !config.channels.some((channel) => channel.id === task.model.split("::")[0])) throw new Error("该视频任务所属渠道已删除，请恢复原渠道后继续查询。");
+    if ((task.provider === "ark" || task.provider === "kexiang") && task.model.includes("::") && !config.channels.some((channel) => channel.id === task.model.split("::")[0])) throw new Error("该视频任务所属渠道已删除，请恢复原渠道后继续查询。");
     const requestConfig = resolveModelRequestConfig(config, task.model);
     if (task.provider === "ark") {
         if (task.baseUrl) requestConfig.baseUrl = task.baseUrl;
         if (task.arkAccessMode) requestConfig.arkAccessMode = task.arkAccessMode;
     }
+    if (task.provider === "kexiang" && task.baseUrl) requestConfig.baseUrl = task.baseUrl;
     assertVideoConfig(requestConfig, requestConfig.model);
+    if (task.provider === "kexiang") return pollKexiangVideoTask(requestConfig, task, options);
     if (task.provider === "ark") return pollArkVideoTask(requestConfig, task, options);
     if (task.provider === "gemini") return pollGeminiVideoTask(requestConfig, task, options);
     return pollOpenAIVideoTask(requestConfig, task, options);
@@ -155,7 +181,7 @@ function validateArkMedia(item: ArkMediaMetadata, kind: "image" | "video" | "aud
 
 function arkRemoteUrl(value = "") { return /^(https?:\/\/|asset:\/\/).+/i.test(value); }
 
-async function createArkVideoTask(config: AiConfig, model: string, prompt: string, images: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+async function createArkVideoTask(config: AiConfig, model: string, prompt: string, images: ReferenceImage[], options: VideoMediaOptions | undefined, sourceConfig: AiConfig): Promise<VideoGenerationTask> {
     const error = validateArkVideoSettings({ ...config, model });
     if (error) throw new Error(error);
     const profile = resolveArkVideoModel(config.model, config.arkAccessMode)!;
@@ -173,23 +199,24 @@ async function createArkVideoTask(config: AiConfig, model: string, prompt: strin
         if ((mode === "edit" || mode === "extend") && !videos.length) throw new Error("视频编辑或延长必须提供参考视频。");
         for (const list of [videos, audios]) if (list.reduce((sum, item) => sum + (item.durationMs || 0), 0) > limits.totalDuration * 1000) throw new Error(`参考视频、音频各自总时长不能超过 ${limits.totalDuration} 秒。`);
     }
+    // Validate all media before uploading or creating any moderation task.
+    images.forEach((item) => validateArkMedia(item, "image", profile));
+    videos.forEach((item) => validateArkMedia(item, "video", profile, mode === "edit"));
+    audios.forEach((item) => validateArkMedia(item, "audio", profile));
+    const preparation = { ...options, supportsAssets: profile.supportsAssets };
     const content: Record<string, unknown>[] = prompt.trim() ? [{ type: "text", text: prompt }] : [];
     for (const [index, item] of images.entries()) {
-        validateArkMedia(item, "image", profile);
-        const source = item.url || item.dataUrl;
-        const url = arkRemoteUrl(source) ? source : await imageToDataUrl(item, options);
+        const url = await prepareMediaReference(sourceConfig, item, "image", preparation);
         if (!arkRemoteUrl(url) && !/^data:image\/[^;]+;base64,/i.test(url)) throw new Error(`${item.name} 不是有效图片来源。`);
         if (url.startsWith("data:")) validateArkMedia({ ...item, bytes: getDataUrlByteSize(url), type: url.slice(5, url.indexOf(";")) }, "image", profile);
         content.push({ type: "image_url", image_url: { url }, role: omni ? "reference_image" : index ? "last_frame" : "first_frame" });
     }
     for (const item of videos) {
-        validateArkMedia(item, "video", profile, mode === "edit");
-        const url = item.referenceUrl || item.url;
+        const url = await prepareMediaReference(sourceConfig, item, "video", preparation);
         if (!arkRemoteUrl(url)) throw new Error(`${item.name}：请提供公网 HTTP(S) 视频地址或 Ark 素材 ID，本地视频不能直接作为 Ark 参考。`);
         content.push({ type: "video_url", video_url: { url }, role: "reference_video" });
     }
     for (const item of audios) {
-        validateArkMedia(item, "audio", profile);
         let url = item.url;
         if (!arkRemoteUrl(url) && !/^data:audio\/[^;]+;base64,/i.test(url)) {
             const file = await referenceMediaToFile(item, "ref.mp3", "invalidReferenceAudio", options);
@@ -207,6 +234,8 @@ async function createArkVideoTask(config: AiConfig, model: string, prompt: strin
         ...(profile.modelPrefix === "doubao-seedance-2-5" && omni ? { omni_reference_task_type: mode } : {}),
     };
     if (new Blob([JSON.stringify(body)]).size > 64 * 1024 ** 2) throw new Error("请求体不能超过 64 MB，请将大素材改为公网 URL 或 Ark 素材 ID。");
+    options?.signal?.throwIfAborted();
+    options?.onProgress?.("素材已就绪，正在提交视频任务");
     try {
         const created = (await axios.post<{ id?: string }>(arkVideoUrl(config), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data;
         if (!created.id) throw new Error(apiText("noVideoTaskId"));
@@ -305,17 +334,6 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
     }
 }
 
-async function videoResultFromUrl(url: string, options?: RequestOptions): Promise<VideoGenerationResult> {
-    try {
-        const response = await axios.get<Blob>(withLocalProxy(url), { responseType: "blob", signal: options?.signal });
-        await assertVideoBlob(response.data);
-        return { blob: response.data };
-    } catch (error) {
-        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
-        return { url, mimeType: "video/mp4" };
-    }
-}
-
 async function createGeminiVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
     const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
@@ -386,11 +404,6 @@ function geminiVideoHeaders(config: Pick<AiConfig, "apiKey">) {
     return { "x-goog-api-key": config.apiKey, "Content-Type": "application/json" };
 }
 
-function videoAspectRatio(size: string) {
-    const ratio = inferVideoRatio(size);
-    return ratio === "auto" ? "16:9" : ratio;
-}
-
 function parseDataUrlInline(dataUrl: string, fallbackType = "image/png"): GeminiInlineData {
     const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
     return { bytesBase64Encoded: match?.[2] || "", mimeType: match?.[1] || fallbackType };
@@ -416,28 +429,9 @@ async function referenceMediaToFile(item: { name: string; type?: string; url?: s
     return new File([blob], item.name || fallbackName, { type: item.type || blob.type || "application/octet-stream" });
 }
 
-function normalizeVideoSeconds(value: string) {
-    return clampVideoSeconds(value);
-}
-
 function resolveVideoMode(mode: string | undefined, imageCount: number) {
     if (mode === "reference" || imageCount > 2) return "reference";
     return "frames";
-}
-
-function normalizeVideoSize(value: string, resolution?: string) {
-    if (value === "auto") return null;
-    if (/^\d+x\d+$/.test(value || "")) return value;
-    const ratio = inferVideoRatio(value || "16:9");
-    if (ratio === "auto") return null;
-    return computeVideoSize(resolution || "720", ratio);
-}
-
-function normalizeVideoResolution(value: string) {
-    if (value === "low") return "480p";
-    if (value === "auto" || value === "high" || value === "medium") return "720p";
-    const resolution = value.replace(/p$/i, "") || "720";
-    return `${resolution}p`;
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {
@@ -456,84 +450,4 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 
 function videoResultUrl(payload: VideoResponse) {
     return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url].find((url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)));
-}
-
-function readApiErrorMessage(value: unknown): string {
-    if (!value) return "";
-    if (typeof value === "string") {
-        try {
-            const parsed = JSON.parse(value);
-            const inner = readApiErrorMessage(parsed) || value;
-            if (inner === value && typeof parsed === "object" && Object.keys(parsed).length === 0) return "";
-            return inner;
-        } catch {
-            if (/<[a-z][\s\S]*>/i.test(value)) return apiText("htmlError", { preview: `${value.slice(0, 80)}...` });
-            return value;
-        }
-    }
-    if (typeof value !== "object") return "";
-    const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
-    // error may be a string or an object containing a message.
-    const errorMsg =
-        typeof payload.error === "string"
-            ? payload.error
-            : (payload.error as { message?: unknown })?.message;
-    return (
-        readApiErrorMessage(payload.msg) ||
-        readApiErrorMessage(payload.message) ||
-        readApiErrorMessage(errorMsg) ||
-        readApiErrorMessage(payload.detail) ||
-        ""
-    );
-}
-
-function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isCancel(error)) return apiText("requestCanceled");
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; message?: string; code?: number | string }>(error)) {
-        if (!error.response && error.code === "ERR_NETWORK") return apiText("requestFailed");
-        const responseData = error.response?.data;
-        return readApiErrorMessage(responseData) || statusMessage(error.response?.status, fallback);
-    }
-    if (error instanceof DOMException && error.name === "AbortError") return apiText("requestCanceled");
-    return error instanceof Error ? readApiErrorMessage(error.message) || error.message : fallback;
-}
-
-function statusMessage(status: number | undefined, fallback: string) {
-    if (status === 401 || status === 403) return apiText("authenticationFailed");
-    if (status === 429) return apiText("rateLimited");
-    return status ? `${fallback}（${status}）` : fallback;
-}
-
-async function assertVideoBlob(blob: Blob) {
-    if (!blob.type.includes("json")) return;
-    let payload: { code?: number; msg?: string; error?: { message?: string } };
-    try {
-        payload = JSON.parse(await blob.text()) as { code?: number; msg?: string; error?: { message?: string } };
-    } catch {
-        return;
-    }
-    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(readApiErrorMessage(payload) || apiText("videoDownloadFailed"));
-    if (payload.error?.message) throw new Error(readApiErrorMessage(payload.error.message) || payload.error.message);
-}
-
-function isPublicMediaUrl(value: string) {
-    return /^https?:\/\//i.test(value || "");
-}
-
-function delay(ms: number, signal?: AbortSignal) {
-    return new Promise<void>((resolve, reject) => {
-        if (signal?.aborted) {
-            reject(new DOMException("Aborted", "AbortError"));
-            return;
-        }
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener(
-            "abort",
-            () => {
-                clearTimeout(timer);
-                reject(new DOMException("Aborted", "AbortError"));
-            },
-            { once: true },
-        );
-    });
 }

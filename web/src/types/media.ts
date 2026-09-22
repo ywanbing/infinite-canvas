@@ -1,3 +1,5 @@
+import type { MediaSource } from "@/types/media-reference";
+
 export type ReferenceVideo = {
     id: string;
     name: string;
@@ -9,6 +11,7 @@ export type ReferenceVideo = {
     width?: number;
     height?: number;
     durationMs?: number;
+    mediaSource?: MediaSource;
 };
 
 export type ReferenceAudio = {
@@ -16,6 +19,7 @@ export type ReferenceAudio = {
     name: string;
     type: string;
     url: string;
+    referenceUrl?: string;
     storageKey?: string;
     durationMs?: number;
     bytes?: number;

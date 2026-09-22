@@ -1,7 +1,9 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, defaultArkImageOptions, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, defaultArkImageOptions, guessCapability, resolveModelChannel, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ChannelModel, type ModelChannel } from "@/stores/use-config-store";
+import { requestKexiangImages } from "./kexiang/image";
+import { fetchKexiangModelIds, fetchKexiangModels, requestKexiangTextResponse } from "./kexiang/text";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -9,7 +11,8 @@ import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import { getImageModelConfig, resolveArkImageModelId, resolveModelImageSize } from "@/lib/image-model-config";
-import type { ReferenceImage } from "@/types/image";
+import type { GeneratedImageResult, ReferenceImage } from "@/types/image";
+import { imageReferenceUrlExpiresAt } from "@/lib/image-reference-url";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -248,12 +251,14 @@ function supportsGeminiImageSize(model: string) {
     return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro");
 }
 
-function resolveImageSource(item: Record<string, unknown>, fallbackFormat = "png") {
+function resolveImageSource(item: Record<string, unknown>, fallbackFormat = "png"): Omit<GeneratedImageResult, "id"> | null {
+    const url = typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url : undefined;
+    const remote = { url, urlExpiresAt: url ? imageReferenceUrlExpiresAt(url) : undefined };
     if (typeof item.b64_json === "string" && item.b64_json) {
-        return `data:image/${item.output_format === "png" || item.output_format === "jpeg" ? item.output_format : fallbackFormat};base64,${item.b64_json}`;
+        return { dataUrl: `data:image/${item.output_format === "png" || item.output_format === "jpeg" ? item.output_format : fallbackFormat};base64,${item.b64_json}`, ...remote };
     }
     if (typeof item.url === "string" && item.url) {
-        return item.url;
+        return { dataUrl: item.url, ...remote };
     }
     return null;
 }
@@ -269,8 +274,8 @@ function parseImagePayload(payload: ImageApiResponse, fallbackFormat = "png") {
         || [];
     const images = imageList
         .map((item) => resolveImageSource(item, fallbackFormat))
-        .filter((value): value is string => Boolean(value))
-        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        .filter((value): value is { dataUrl: string; url?: string; urlExpiresAt?: number } => Boolean(value))
+        .map((image) => ({ id: nanoid(), ...image }));
 
     if (images.length === 0) {
         // Check whether the response contains data in an unrecognized format.
@@ -508,9 +513,9 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
 }
 
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
-    const response = await fetch(aiApiUrl(config, "/responses"), {
+    const response = config.apiFormat === "kexiang" ? await requestKexiangTextResponse(config, body, options) : await fetch(aiApiUrl(config, "/responses"), {
         method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        headers: { ...aiHeaders(config), "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
@@ -724,9 +729,13 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
                 return part.fileData?.fileUri || null;
             })
             .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+            .map(imageResultFromUrl) || [];
     if (!images.length) throw new Error(apiText("geminiNoImage"));
     return images;
+}
+
+function imageResultFromUrl(dataUrl: string): GeneratedImageResult {
+    return { id: nanoid(), dataUrl, url: /^https?:\/\//i.test(dataUrl) ? dataUrl : undefined, urlExpiresAt: imageReferenceUrlExpiresAt(dataUrl) };
 }
 
 async function requestArkImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
@@ -737,7 +746,7 @@ async function requestArkImages(config: AiConfig, prompt: string, references: Re
         model: resolveArkImageModelId(config.model),
         prompt: withSystemPrompt(config, prompt),
         watermark,
-        response_format: "b64_json",
+        response_format: "url",
         ...(size ? { size } : {}),
         ...(images.length ? { image: images } : {}),
         ...(outputFormat !== "auto" ? { output_format: outputFormat } : {}),
@@ -751,7 +760,18 @@ async function requestArkImages(config: AiConfig, prompt: string, references: Re
     return results.flat();
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<GeneratedImageResult[]> {
+    return withMediaSources(await generateImages(config, prompt, options), config);
+}
+
+function withMediaSources(images: GeneratedImageResult[], config: AiConfig) {
+    const selected = config.model || config.imageModel;
+    const request = resolveModelRequestConfig(config, selected);
+    const origin = request.apiFormat === "ark" && getImageModelConfig("ark", request.model) && !resolveModelScript(config, selected) ? "ark" as const : "other" as const;
+    return images.map((image) => ({ ...image, mediaSource: { id: image.id, origin, channelId: resolveModelChannel(config, selected).id, model: request.model, generatedAt: Date.now(), originalUrl: image.url, urlExpiresAt: image.urlExpiresAt } }));
+}
+
+async function generateImages(config: AiConfig, prompt: string, options?: RequestOptions): Promise<GeneratedImageResult[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -769,7 +789,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return normalizePluginImages(result).map(imageResultFromUrl);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -781,6 +801,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
+    if (requestConfig.apiFormat === "kexiang") return requestKexiangImages(requestConfig, prompt, [], n, options);
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
@@ -818,7 +839,11 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<GeneratedImageResult[]> {
+    return withMediaSources(await editImages(config, prompt, references, options), config);
+}
+
+async function editImages(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<GeneratedImageResult[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
@@ -838,7 +863,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return normalizePluginImages(result).map(imageResultFromUrl);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -850,6 +875,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
+    if (requestConfig.apiFormat === "kexiang") return requestKexiangImages(requestConfig, prompt, references, n, options);
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
@@ -940,6 +966,7 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
                 .filter((id): id is string => Boolean(id))
                 .sort((a, b) => a.localeCompare(b));
         }
+        if (config.apiFormat === "kexiang") return await fetchKexiangModelIds(config);
         const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
             headers: {
                 Authorization: `Bearer ${config.apiKey}`,
@@ -954,8 +981,10 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
     }
 }
 
-export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+export async function fetchChannelModels(channel: ModelChannel): Promise<ChannelModel[]> {
+    if (channel.apiFormat === "kexiang") return fetchKexiangModels(channel);
+    const models = await fetchImageModels(channel);
+    return models.map((name) => ({ name, capability: guessCapability(name) }));
 }
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {

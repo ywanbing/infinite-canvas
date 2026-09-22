@@ -1,6 +1,19 @@
 import "./browser-storage";
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import axios from "axios";
+import localforage from "localforage";
+
+const storageSpies: Array<{ mockRestore(): void }> = [];
+const localforagePrototype = Object.getPrototypeOf(localforage) as typeof localforage;
+const originalCreateInstance = localforagePrototype.createInstance;
+const createInstance = spyOn(localforagePrototype, "createInstance").mockImplementation(function (options) {
+    const instance = originalCreateInstance.call(this, options);
+    storageSpies.push(
+        spyOn(instance, "iterate").mockResolvedValue(undefined),
+        spyOn(instance, "setItem").mockImplementation(async (_key, value) => value),
+    );
+    return instance;
+});
 
 const { createModelChannel, defaultConfig, useConfigStore } = await import("../src/stores/use-config-store");
 const { createVideoGenerationTask, pollVideoGenerationTask, waitForVideoGenerationTask } = await import("../src/services/api/video");
@@ -16,9 +29,10 @@ beforeEach(() => {
     get = spyOn(axios, "get").mockResolvedValue({ data: { status: "queued" } });
 });
 afterEach(() => { post.mockRestore(); get.mockRestore(); useConfigStore.setState({ config: defaultConfig }); });
+afterAll(() => { storageSpies.forEach((mock) => mock.mockRestore()); createInstance.mockRestore(); });
 
 test("creates native Ark JSON with 4k and smart duration", async () => {
-    expect(await createVideoGenerationTask(config(), "海浪")).toEqual({ id: "task-1", provider: "ark", model: "ark-video::doubao-seedance-2-0-260128", baseUrl: "https://example.com/api/v3", arkAccessMode: "api" });
+    expect(await createVideoGenerationTask(config(), "海浪")).toEqual({ id: "task-1", provider: "ark", model: "ark-video::doubao-seedance-2-0-260128", baseUrl: "https://example.com/api/v3", arkAccessMode: "api", createdAt: expect.any(Number) });
     expect(post.mock.calls[0][0]).toBe("https://example.com/api/v3/contents/generations/tasks");
     expect(post.mock.calls[0][1]).toMatchObject({ model: "doubao-seedance-2-0-260128", resolution: "4k", duration: -1, ratio: "adaptive", content: [{ type: "text", text: "海浪" }] });
 });
@@ -29,7 +43,7 @@ test("rejects fast 1080p before HTTP", async () => {
 });
 
 const imageRef = { id: "i", name: "image.png", type: "image/png", dataUrl: "", url: "asset://image" };
-const videoRef = { id: "v", name: "video.mp4", type: "video/mp4", url: "https://example.com/video.mp4", durationMs: 4000 };
+const videoRef = { id: "v", name: "video.mp4", type: "video/mp4", url: "https://example.com/video.mp4", durationMs: 4000, mediaSource: { id: "ark-video-v", origin: "ark" as const, channelId: "ark-video", model: "doubao-seedance-2-0-260128", generatedAt: Date.now(), originalUrl: "https://example.com/video.mp4" } };
 const audioRef = { id: "a", name: "audio.wav", type: "audio/wav", url: "data:audio/wav;base64,AAAA", durationMs: 2000 };
 
 test("registers seven models and resolves active Agent Plan aliases", () => {
@@ -116,7 +130,7 @@ test("rejects incompatible roles, counts, durations, bytes and local videos befo
         () => createVideoGenerationTask(config(), "海浪", [imageRef]),
         () => createVideoGenerationTask(input, "", [], { audios: [audioRef] }),
         () => createVideoGenerationTask(input, "", Array(10).fill(imageRef)),
-        () => createVideoGenerationTask(input, "", [], { videos: [{ ...videoRef, url: "blob:local" }] }),
+        () => createVideoGenerationTask(input, "", [], { videos: [{ ...videoRef, url: "blob:local", mediaSource: undefined }] }),
         () => createVideoGenerationTask(input, "", [], { videos: [{ ...videoRef, durationMs: 16000 }] }),
         () => createVideoGenerationTask(input, "", [], { videos: [{ ...videoRef, bytes: 200 * 1024 ** 2 + 1 }] }),
         () => createVideoGenerationTask(input, "", [], { videos: [{ ...videoRef, width: 299 }] }),
@@ -136,7 +150,7 @@ test.each(["queued", "running"])("keeps %s pending and task channel identity", a
 });
 
 test("accepts a public HTTP reference without downloading or rewriting it", async () => {
-    await createVideoGenerationTask({ ...config(), videoMode: "reference" }, "海浪", [], { videos: [{ ...videoRef, url: "http://example.com/video.mp4" }] });
+    await createVideoGenerationTask({ ...config(), videoMode: "reference" }, "海浪", [], { videos: [{ ...videoRef, url: "http://example.com/video.mp4", mediaSource: { ...videoRef.mediaSource, id: "ark-video-http", originalUrl: "http://example.com/video.mp4" } }] });
     expect(post.mock.calls[0][1]).toHaveProperty("content.1.video_url.url", "http://example.com/video.mp4");
     expect(get).not.toHaveBeenCalled();
 });
@@ -170,10 +184,13 @@ test.each(["expired", "failed", "cancelled"])("stops on %s with upstream error",
 });
 
 test("successful result downloads, missing URL fails, unknown status remains retriable", async () => {
-    const task = { id: "1", model: config().model, provider: "ark" as const };
+    const task = { id: "1", model: config().model, provider: "ark" as const, createdAt: 1_000 };
     const blob = new Blob(["video"], { type: "video/mp4" });
     get.mockResolvedValueOnce({ data: { status: "succeeded", content: { video_url: "https://example.com/result.mp4" } } }).mockResolvedValueOnce({ data: blob });
-    expect(await pollVideoGenerationTask(config(), task)).toEqual({ status: "completed", result: { blob, sourceUrl: "https://example.com/result.mp4" } });
+    expect(await pollVideoGenerationTask(config(), task)).toEqual({ status: "completed", result: { blob, sourceUrl: "https://example.com/result.mp4", mediaSource: {
+        id: '["ark",null,"ark-video::doubao-seedance-2-0-260128","1"]', origin: "ark", channelId: "ark-video", model: task.model,
+        generatedAt: 1_000, originalUrl: "https://example.com/result.mp4", urlExpiresAt: 86_401_000,
+    } } });
     get.mockResolvedValueOnce({ data: { status: "succeeded" } });
     expect((await pollVideoGenerationTask(config(), task)).status).toBe("failed");
     get.mockResolvedValueOnce({ data: { status: "unknown" } });
@@ -201,7 +218,7 @@ test("proxy and cancellation apply to task requests but not reference URLs", asy
     expect(post).toHaveBeenCalledTimes(1);
 });
 
-test("local data images and fetched audio become data URLs", async () => {
+test("local data images require audit identity while fetched audio still becomes a data URL", async () => {
     const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Blob(["wav"], { type: "audio/wav" })));
     const originalReader = globalThis.FileReader;
     Object.defineProperty(globalThis, "FileReader", { configurable: true, writable: true, value: class {
@@ -209,8 +226,10 @@ test("local data images and fetched audio become data URLs", async () => {
         async readAsDataURL(file: Blob) { this.result = `data:${file.type};base64,${Buffer.from(await file.arrayBuffer()).toString("base64")}`; this.onload?.(); }
     } });
     try {
-        await createVideoGenerationTask({ ...config(), videoMode: "reference" }, "", [{ ...imageRef, url: "", dataUrl: "data:image/png;base64,AAAA" }], { audios: [{ ...audioRef, url: "blob:local-audio" }] });
-        expect(post.mock.calls[0][1]).toHaveProperty("content.0.image_url.url", "data:image/png;base64,AAAA");
+        await expect(createVideoGenerationTask({ ...config(), videoMode: "reference" }, "", [{ ...imageRef, url: "", dataUrl: "data:image/png;base64,AAAA" }])).rejects.toThrow("缺少可持久识别的来源");
+        expect(post).not.toHaveBeenCalled();
+        await createVideoGenerationTask({ ...config(), videoMode: "reference" }, "", [imageRef], { audios: [{ ...audioRef, url: "blob:local-audio" }] });
+        expect(post.mock.calls[0][1]).toHaveProperty("content.0.image_url.url", "asset://image");
         expect(post.mock.calls[0][1]).toHaveProperty("content.1.audio_url.url", "data:audio/wav;base64,d2F2");
     } finally { fetchMock.mockRestore(); Object.defineProperty(globalThis, "FileReader", { configurable: true, writable: true, value: originalReader }); }
 });

@@ -90,7 +90,7 @@ function assertAudioConfig(config: AiConfig, model: string) {
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
     if (config.apiFormat === "gemini") throw new Error(apiText("geminiAudioUnsupported"));
-    if (config.apiFormat === "ark") throw new Error(i18n.t("config.channelEditor.arkCustomScriptRequired", { capability: i18n.t("config.channelEditor.capabilities.audio") }));
+    if (config.apiFormat === "ark" || config.apiFormat === "kexiang") throw new Error(i18n.t("config.channelEditor.arkCustomScriptRequired", { capability: i18n.t("config.channelEditor.capabilities.audio") }));
 }
 
 async function assertAudioBlob(blob: Blob) {
