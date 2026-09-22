@@ -24,8 +24,8 @@ export function createCanvasNode(type: CanvasNodeTypeId, position: Position, met
     };
 }
 
-export function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
-    return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
+export function imageMetadata(image: UploadedImage, source?: Pick<ReferenceImage, "url" | "urlExpiresAt" | "arkAssetSource" | "mediaSource">): CanvasNodeMetadata {
+    return { content: image.url, url: source?.url, urlExpiresAt: source?.urlExpiresAt, arkAssetSource: source?.arkAssetSource, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType, mediaSource: source?.mediaSource };
 }
 
 export function videoMetadata(video: UploadedFile): CanvasNodeMetadata {

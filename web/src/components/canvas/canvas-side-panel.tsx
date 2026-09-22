@@ -305,8 +305,8 @@ const ASSET_GROUPS: { kind: AssetKind; icon: typeof Square }[] = [
 
 function buildInsertPayload(asset: Asset): InsertAssetPayload {
     if (asset.kind === "text") return { kind: "text", content: asset.data.content, title: asset.title };
-    if (asset.kind === "video") return { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height };
-    return { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title };
+    if (asset.kind === "video") return { kind: "video", url: asset.data.url, referenceUrl: asset.data.referenceUrl, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height, durationMs: asset.data.durationMs, mimeType: asset.data.mimeType, bytes: asset.data.bytes, mediaSource: asset.data.mediaSource };
+    return { kind: "image", dataUrl: asset.data.dataUrl, url: asset.data.url, urlExpiresAt: asset.data.urlExpiresAt, arkAssetSource: asset.data.arkAssetSource, storageKey: asset.data.storageKey, title: asset.title, mediaSource: asset.data.mediaSource };
 }
 
 const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
@@ -344,7 +344,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                     added += 1;
                 } else if (file.type.startsWith("video/")) {
                     const media = await uploadMediaFile(file, "video");
-                    addAsset({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType } });
+                    addAsset({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, durationMs: media.durationMs, bytes: media.bytes, mimeType: media.mimeType } });
                     added += 1;
                 }
             }

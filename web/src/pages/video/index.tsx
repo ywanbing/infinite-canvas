@@ -1,3 +1,7 @@
+import { MediaAssetButton } from "@/components/media-asset-button";
+import type { MediaSource } from "@/types/media-reference";
+import { auditKexiangAsset } from "@/services/api/kexiang/assets";
+import { isKexiangSeedanceModel, resolveKexiangModelRequest, validateKexiangVideoMode } from "@/lib/kexiang-models";
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
@@ -18,7 +22,7 @@ import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUr
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { boolConfig, modelOptionLabel, resolveModelRequestConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, modelOptionLabel, resolveModelRequestConfig, resolveModelScript, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
@@ -36,6 +40,7 @@ type GeneratedVideo = {
     bytes: number;
     mimeType: string;
     sourceUrl?: string;
+    mediaSource?: MediaSource;
 };
 
 type GenerationResult = {
@@ -102,6 +107,7 @@ export default function VideoPage() {
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [referenceVideos, setReferenceVideos] = useState<ReferenceVideo[]>([]);
     const [referenceAudios, setReferenceAudios] = useState<ReferenceAudio[]>([]);
+    const [generationStage, setGenerationStage] = useState("");
     const [logs, setLogs] = useState<GenerationLog[]>([]);
     const [running, setRunning] = useState(false);
     const [logsOpen, setLogsOpen] = useState(false);
@@ -130,11 +136,20 @@ export default function VideoPage() {
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const selectedConfig = { ...effectiveConfig, model };
-    const ark = resolveModelRequestConfig(selectedConfig, model).apiFormat === "ark";
+    const requestConfig = resolveModelRequestConfig(selectedConfig, model);
+    const ark = requestConfig.apiFormat === "ark";
+    const kexiangSeedance = requestConfig.apiFormat === "kexiang" && isKexiangSeedanceModel(requestConfig.model);
+    const kexiang = requestConfig.apiFormat === "kexiang" && !resolveModelScript(selectedConfig, model);
+    const kexiangProfile = kexiang ? resolveKexiangModelRequest(requestConfig.model) : undefined;
     const profile = getArkVideoCapabilities(selectedConfig);
     const referenceMode = ark && ["reference", "edit", "extend"].includes(effectiveConfig.videoMode);
-    const canGenerate = Boolean(prompt.trim() || (ark && (references.length || referenceVideos.length || referenceAudios.length)));
-    const settingsError = validateArkVideoSettings(selectedConfig);
+    const kexiangReferenceMode = kexiang && !validateKexiangVideoMode(requestConfig.model, effectiveConfig.videoMode) && ["mixVideo", "motionControl"].includes(effectiveConfig.videoMode);
+    const allowedMedia = {
+        video: kexiangReferenceMode || (referenceMode && Boolean(profile?.mediaLimits.videos)),
+        audio: (kexiangReferenceMode && effectiveConfig.videoMode === "mixVideo" && Boolean(kexiangProfile?.referenceAudio)) || (referenceMode && Boolean(profile?.mediaLimits.audios)),
+    };
+    const canGenerate = Boolean(prompt.trim() || ((ark || kexiang) && (references.length || referenceVideos.length || referenceAudios.length)));
+    const settingsError = kexiang ? validateKexiangVideoMode(requestConfig.model, effectiveConfig.videoMode) : validateArkVideoSettings(selectedConfig);
 
     const displayedPending = previewLog?.status === "pending" || previewLog?.status === "submitting";
     const displayedStartedAt = previewLog?.createdAt;
@@ -209,6 +224,11 @@ export default function VideoPage() {
             message.error(t("videoWorkbench.clipboardEmpty"));
         }
     };
+    const auditAudio = async (item: ReferenceAudio) => {
+        const referenceUrl = await auditKexiangAsset(requestConfig, item.referenceUrl || item.url, item.name || "参考音频", "Audio");
+        setReferenceAudios((value) => value.map((reference) => reference.id === item.id ? { ...reference, referenceUrl } : reference));
+        message.success("素材审核通过");
+    };
     const generate = async () => {
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
@@ -225,13 +245,14 @@ export default function VideoPage() {
         const controller = new AbortController();
         submissionController.current = controller;
         setElapsedMs(0);
+        setGenerationStage("准备参考素材");
         setRunning(true);
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
         let log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, referenceVideos: snapshot.referenceVideos, referenceAudios: snapshot.referenceAudios, durationMs: 0, status: "submitting" });
         setPreviewLogId(log.id);
         try {
             await saveLog(log);
-            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { videos: snapshot.referenceVideos, audios: snapshot.referenceAudios, signal: controller.signal });
+            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { videos: snapshot.referenceVideos, audios: snapshot.referenceAudios, signal: controller.signal, onProgress: (stage) => { if (mounted.current && !controller.signal.aborted) setGenerationStage(stage); } });
             log = { ...log, status: "pending", task };
             await saveLog(log);
             if (mounted.current) void pollGenerationLog(log, snapshot.config, agentTaskId);
@@ -302,7 +323,7 @@ export default function VideoPage() {
             coverUrl: "",
             tags: [],
             source: t("videoWorkbench.source"),
-            data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
+            data: { url: video.url, referenceUrl: video.sourceUrl, mediaSource: video.mediaSource, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
             metadata: { source: "video-page", prompt },
         });
         message.success(t("common.addedToAssets"));
@@ -313,7 +334,9 @@ export default function VideoPage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }].slice(0, ark ? undefined : 7));
+            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, url: payload.url, urlExpiresAt: payload.urlExpiresAt, mediaSource: payload.mediaSource || (payload.storageKey ? { id: payload.arkAssetSource || payload.storageKey, origin: "upload" } : undefined), arkAssetSource: payload.arkAssetSource || payload.storageKey, storageKey: stored.storageKey }].slice(0, ark ? undefined : 7));
+        } else if (payload.kind === "video") {
+            setReferenceVideos((value) => [...value, { id: nanoid(), name: payload.title, type: payload.mimeType || "video/mp4", url: payload.url, referenceUrl: payload.referenceUrl, mediaSource: payload.mediaSource, storageKey: payload.storageKey, durationMs: payload.durationMs, width: payload.width, height: payload.height, bytes: payload.bytes }]);
         }
         setAssetPickerOpen(false);
     };
@@ -395,6 +418,7 @@ export default function VideoPage() {
                         bytes: stored.bytes,
                         mimeType: stored.mimeType,
                         sourceUrl: state.result.sourceUrl,
+                        mediaSource: state.result.mediaSource,
                     };
                     if (agentTaskId) updateAgentTask(agentTaskId, { status: "succeeded", successCount: 1, failCount: 0, error: undefined });
                     try { await saveLog({ ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined }); }
@@ -504,6 +528,7 @@ export default function VideoPage() {
                                             <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
+                                            {(ark || kexiangSeedance) && !resolveModelScript(selectedConfig, model) && <div className="absolute right-8 top-1 rounded bg-white/90 text-stone-900 dark:bg-stone-900/90 dark:text-stone-100"><MediaAssetButton image={item} name={item.name} config={selectedConfig} compact /></div>}
                                             <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={t("videoWorkbench.removeImage")}>
                                                 <Trash2 className="size-3.5" />
                                             </button>
@@ -511,6 +536,7 @@ export default function VideoPage() {
                                     ))}
                                     {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{referenceDragTarget ? t("videoWorkbench.dropReferences") : t("videoWorkbench.noImages")}</div> : null}
                                 </div>
+                                {(ark || kexiangSeedance) && !resolveModelScript(selectedConfig, model) && <div className="text-xs opacity-60">生成前自动准备图片与视频；火山生成素材 30 天内免审，其他素材上传公网并审核后引用。审核处理中可稍后重试查询。</div>}
                             </div>
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
@@ -522,7 +548,7 @@ export default function VideoPage() {
                                 </Button>
                             </div>
 
-                            {(referenceMode || referenceVideos.length > 0 || referenceAudios.length > 0) && <ReferenceMediaInput videos={referenceVideos} audios={referenceAudios} onVideosChange={setReferenceVideos} onAudiosChange={setReferenceAudios} allowAdd={referenceMode && Boolean(profile?.mediaLimits.videos)} />}
+                            {(allowedMedia.video || allowedMedia.audio || referenceVideos.length > 0 || referenceAudios.length > 0) && <ReferenceMediaInput videos={referenceVideos} audios={referenceAudios} onVideosChange={setReferenceVideos} onAudiosChange={setReferenceAudios} allowedMedia={allowedMedia} auditEnabled={(ark || kexiangSeedance) && !resolveModelScript(selectedConfig, model)} onAuditAudio={kexiangSeedance ? auditAudio : undefined} />}
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
                                 <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
@@ -544,7 +570,7 @@ export default function VideoPage() {
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={retryResult} resumable={previewLog?.status === "paused" && Boolean(previewLog.task)} /> : <PendingVideoCard key={result.id} submitting={previewLog?.status === "submitting"} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={retryResult} resumable={previewLog?.status === "paused" && Boolean(previewLog.task)} /> : <PendingVideoCard key={result.id} submitting={previewLog?.status === "submitting"} stage={generationStage} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
@@ -627,13 +653,13 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
     );
 }
 
-function PendingVideoCard({ submitting }: { submitting?: boolean }) {
+function PendingVideoCard({ submitting, stage }: { submitting?: boolean; stage?: string }) {
     const { t } = useTranslation();
     return (
         <div className="relative aspect-video overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
-                <span>{submitting ? "提交中" : t("workbench.generating")}</span>
+                <span>{submitting ? stage || "提交中" : t("workbench.generating")}</span>
             </div>
         </div>
     );
@@ -766,7 +792,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         model: log.model || config.videoModel || "",
         config,
         references,
-        referenceVideos: log.referenceVideos || [],
+        referenceVideos: await Promise.all((log.referenceVideos || []).map(async (item) => ({ ...item, url: await resolveMediaUrl(item.storageKey, item.url) }))),
         referenceAudios: await Promise.all((log.referenceAudios || []).map(async (item) => ({ ...item, url: await resolveMediaUrl(item.storageKey, item.url) }))),
         durationMs: log.durationMs || 0,
         size: log.size || config.size || "",
@@ -783,6 +809,7 @@ function serializeLog(log: GenerationLog): GenerationLog {
     return {
         ...log,
         references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
+        referenceVideos: log.referenceVideos.map((item) => ({ ...item, url: item.storageKey ? "" : item.url })),
         referenceAudios: log.referenceAudios.map((item) => ({ ...item, url: item.storageKey ? "" : item.url })),
         video: log.video?.storageKey ? { ...log.video, url: "" } : log.video,
     };
@@ -853,7 +880,7 @@ function buildLog({ prompt, model, config, references, referenceVideos, referenc
 }
 
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
-    if (resolveModelRequestConfig(config, model).apiFormat === "ark") return { ...config, model, videoModel: model };
+    if (["ark", "kexiang"].includes(resolveModelRequestConfig(config, model).apiFormat)) return { ...config, model, videoModel: model };
     return {
         ...config,
         model,

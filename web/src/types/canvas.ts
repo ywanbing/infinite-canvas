@@ -1,3 +1,5 @@
+import type { MediaSource } from "@/types/media-reference";
+
 export type Position = {
     x: number;
     y: number;
@@ -30,11 +32,15 @@ export type CanvasNodeImage = {
     status: CanvasNodeStatus;
     errorDetails?: string;
     content: string;
+    url?: string;
+    urlExpiresAt?: number;
+    arkAssetSource?: string;
     storageKey?: string;
     naturalWidth: number;
     naturalHeight: number;
     bytes: number;
     mimeType: string;
+    mediaSource?: MediaSource;
 };
 
 export type CanvasNodeText = {
@@ -46,6 +52,9 @@ export type CanvasNodeText = {
 
 export type CanvasNodeMetadata = {
     content?: string;
+    url?: string;
+    urlExpiresAt?: number;
+    arkAssetSource?: string;
     composerContent?: string;
     prompt?: string;
     status?: CanvasNodeStatus;
@@ -82,13 +91,17 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     videoTaskId?: string;
-    videoTaskProvider?: "openai" | "gemini" | "ark";
+    videoTaskCreatedAt?: number;
+    generationStage?: string;
+    videoTaskProvider?: "openai" | "gemini" | "ark" | "kexiang";
     videoReferenceUrl?: string;
+    kexiangImageAudit?: { source: string; scope: string; assetUrl: string };
     videoTaskModel?: string;
     videoTaskBaseUrl?: string;
     videoTaskAccessMode?: "api" | "agent-plan";
     groupId?: string;
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
+    mediaSource?: MediaSource;
 };
 
 export type CanvasNodeData = {
@@ -119,8 +132,12 @@ export type CanvasAssistantReference = {
 export type CanvasAssistantImage = {
     id: string;
     dataUrl: string;
+    url?: string;
+    urlExpiresAt?: number;
+    arkAssetSource?: string;
     storageKey?: string;
     prompt: string;
+    mediaSource?: MediaSource;
 };
 
 export type CanvasAssistantMessage = {

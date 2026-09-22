@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { MediaAssetButton } from "@/components/media-asset-button";
 import { formatBytes } from "@/lib/image-utils";
 import { pickImageSource } from "@/lib/image-thumbnail";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
@@ -455,7 +456,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot && props.node.type === CanvasNodeType.Image) return <ImageNodeContent {...props} />;
     if (props.node.type === CanvasNodeType.Text && props.node.metadata?.texts?.length && (props.node.metadata.status !== "error" || props.node.metadata.texts.some((text) => text.content))) return <TextContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} stage={props.node.metadata.generationStage} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
@@ -494,12 +495,12 @@ function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererP
     );
 }
 
-function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+function LoadingContent({ theme, stage }: Pick<NodeContentRendererProps, "theme"> & { stage?: string }) {
     const { t } = useTranslation();
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
             <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span>
+            <span className="text-[10px] tracking-[0.2em]">{stage || t("canvas.node.generating")}</span>
         </div>
     );
 }
@@ -709,6 +710,7 @@ function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
             </div>
         );
     return <div className="relative h-full w-full">
+        <div className="absolute right-2 top-2 z-10"><MediaAssetButton image={{ ...node.metadata, url: node.metadata.content, referenceUrl: node.metadata.videoReferenceUrl }} name={node.title} kind="video" compact /></div>
         <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />
         {node.metadata.errorDetails && !node.metadata.storageKey && <div role="alert" className="absolute inset-x-2 top-2 rounded px-2 py-1 text-xs" style={{ background: theme.toolbar.panel, color: theme.node.text }}>{node.metadata.errorDetails}</div>}
     </div>;
@@ -800,6 +802,9 @@ function ImageContent({
                 )}
             </div>
             {primaryImage?.status === "error" ? <BatchImageFailureActions placement="left" onRetry={() => onRetryBatchImage?.(primaryImage.id)} onDelete={() => onDeleteBatchImage?.(primaryImage.id)} /> : null}
+            {primaryContent && <div className="absolute bottom-2 left-2 z-30 rounded" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                <MediaAssetButton image={{ ...(primaryImage?.content ? primaryImage : node.metadata), dataUrl: primaryContent }} name={node.title} compact />
+            </div>}
             {primaryImage?.content ? (
                 <button type="button" className="pointer-events-none absolute left-2.5 top-2.5 z-30 flex h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium opacity-0 shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02] group-hover/node:pointer-events-auto group-hover/node:opacity-100" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownloadBatchImage?.(primaryImage.id))}>
                     <Download className="size-3" />
@@ -878,6 +883,9 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
             }}
         >
             {image.content ? <img src={source} alt={node.title} draggable={false} className="pointer-events-none h-full w-full select-none object-contain" /> : <ImageSlotStatus image={image} />}
+            {image.content && <div className="absolute bottom-2 left-2 z-30 rounded" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                <MediaAssetButton image={{ ...image, dataUrl: image.content }} name={node.title} compact />
+            </div>}
             {image.content ? (
                 <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/node:pointer-events-auto group-hover/node:opacity-100">
                     <button type="button" className="flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-1.5 text-[10px] font-medium shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownload())}>
@@ -932,7 +940,7 @@ function ImageInfoBar({ node }: { node: CanvasNodeData }) {
     const height = Math.round(node.metadata?.naturalHeight || node.height);
     const size = formatBytes(node.metadata?.bytes || 0);
     return (
-        <div className="pointer-events-none absolute bottom-3 right-3 z-40 max-w-[calc(100%-24px)]">
+        <div className="pointer-events-none absolute bottom-3 right-3 z-40 max-w-[calc(100%-64px)]">
             <span className="max-w-full truncate rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium leading-none text-white backdrop-blur-sm">
                 {width} x {height}
                 {size ? ` · ${size}` : ""}

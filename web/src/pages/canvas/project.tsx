@@ -307,13 +307,13 @@ function InfiniteCanvasPage() {
 
     const completeVideoNodeTask = useCallback(
         async (nodeId: string, config: Parameters<typeof buildGenerationConfig>[0], prompt: string, images: Parameters<typeof createVideoGenerationTask>[2], signal: AbortSignal, extra: CanvasNodeData["metadata"] = {}, videos: ReferenceVideo[] = [], audios: ReferenceAudio[] = []) => {
-            const task = await createVideoGenerationTask(config, prompt, images, { signal, videos, audios });
+            const task = await createVideoGenerationTask(config, prompt, images || [], { signal, videos, audios, onProgress: (generationStage) => { if (!signal.aborted) setNodes((prev) => prev.map((item) => item.id === nodeId ? { ...item, metadata: { ...item.metadata, generationStage } } : item)); } });
             if (task.provider !== "plugin") {
-                setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: task.provider as "openai" | "gemini" | "ark", videoTaskModel: task.model, videoTaskBaseUrl: task.baseUrl, videoTaskAccessMode: task.arkAccessMode, model: config.model } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskCreatedAt: task.createdAt, generationStage: undefined, videoTaskProvider: task.provider as "openai" | "gemini" | "ark" | "kexiang", videoTaskModel: task.model, videoTaskBaseUrl: task.baseUrl, videoTaskAccessMode: task.arkAccessMode, model: config.model } } : item)));
             }
             const result = await waitForVideoGenerationTask(config, task, { signal });
             const video = await storeGeneratedVideo(result);
-            setNodes((prev) => prev.map((item) => (item.id === nodeId ? applyGeneratedVideo(item, video, { prompt, model: config.model, videoReferenceUrl: result.sourceUrl, ...extra }) : item)));
+            setNodes((prev) => prev.map((item) => (item.id === nodeId ? applyGeneratedVideo(item, video, { prompt, model: config.model, videoReferenceUrl: result.sourceUrl, mediaSource: result.mediaSource, ...extra }) : item)));
         },
         [],
     );
@@ -337,14 +337,14 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(node.id);
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
                 controller = startGenerationRequest(node.id, node.id, node.id);
-                const result = await waitForVideoGenerationTask(generationConfig, { id: taskId, provider: node.metadata?.videoTaskProvider || "openai", model: generationConfig.model, baseUrl: node.metadata?.videoTaskBaseUrl, arkAccessMode: node.metadata?.videoTaskAccessMode }, { signal: controller.signal });
+                const result = await waitForVideoGenerationTask(generationConfig, { id: taskId, provider: node.metadata?.videoTaskProvider || "openai", model: generationConfig.model, baseUrl: node.metadata?.videoTaskBaseUrl, arkAccessMode: node.metadata?.videoTaskAccessMode, createdAt: node.metadata?.videoTaskCreatedAt }, { signal: controller.signal });
                 const video = await storeGeneratedVideo(result);
                 setNodes((prev) =>
                     prev.map((item) =>
                         item.id === node.id
                             ? applyGeneratedVideo(item, video, {
                                   prompt: item.metadata?.prompt,
-                                  videoReferenceUrl: result.sourceUrl,
+                                  videoReferenceUrl: result.sourceUrl, mediaSource: result.mediaSource,
                                   model: generationConfig.model,
                                   size: generationConfig.size,
                                   seconds: generationConfig.videoSeconds,
@@ -1725,6 +1725,9 @@ function InfiniteCanvasPage() {
                     metadata: {
                         ...node.metadata,
                         content: image.content,
+                        url: image.url,
+                        urlExpiresAt: image.urlExpiresAt,
+                        arkAssetSource: image.arkAssetSource, mediaSource: image.mediaSource,
                         storageKey: image.storageKey,
                         naturalWidth: image.naturalWidth,
                         naturalHeight: image.naturalHeight,
@@ -1751,6 +1754,9 @@ function InfiniteCanvasPage() {
             ...size,
             metadata: {
                 content: image.content,
+                url: image.url,
+                urlExpiresAt: image.urlExpiresAt,
+                arkAssetSource: image.arkAssetSource, mediaSource: image.mediaSource,
                 storageKey: image.storageKey,
                 naturalWidth: image.naturalWidth,
                 naturalHeight: image.naturalHeight,
@@ -1842,7 +1848,7 @@ function InfiniteCanvasPage() {
                     coverUrl: "",
                     tags: [],
                     source: "Canvas",
-                    data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" },
+                    data: { url: node.metadata.content, referenceUrl: node.metadata.videoReferenceUrl, mediaSource: node.metadata.mediaSource, durationMs: node.metadata.durationMs, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" },
                     metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
                 });
                 message.success(t("common.addedToAssets"));
@@ -1858,6 +1864,9 @@ function InfiniteCanvasPage() {
                 source: "Canvas",
                 data: {
                     dataUrl,
+                    url: node.metadata.url,
+                    urlExpiresAt: node.metadata.urlExpiresAt,
+                    arkAssetSource: node.metadata.arkAssetSource, mediaSource: node.metadata.mediaSource,
                     storageKey: node.metadata.storageKey,
                     width: node.metadata.naturalWidth || node.width,
                     height: node.metadata.naturalHeight || node.height,
@@ -2028,7 +2037,7 @@ function InfiniteCanvasPage() {
                 const image = await requestEdit(generationConfig, prompt, references, { signal: controller.signal }).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded, image), prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.maskFailed");
@@ -2109,7 +2118,7 @@ function InfiniteCanvasPage() {
                 ).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded, image), prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
@@ -2332,7 +2341,7 @@ function InfiniteCanvasPage() {
                         : await requestGeneration({ ...generationConfig, count: "1" }, context.prompt, { signal: controller.signal }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                     setNodes((prev) =>
-                        prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
+                        prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded, image), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
                     );
                     setDialogNodeId(null);
                 } catch (error) {
@@ -2351,10 +2360,11 @@ function InfiniteCanvasPage() {
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
+            const hydratedGenerationContext = await hydrateNodeGenerationContext(
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
-                mode === "video" && resolveModelRequestConfig(generationConfig, generationConfig.model).apiFormat === "ark",
+                mode === "video" && ["ark", "kexiang"].includes(resolveModelRequestConfig(generationConfig, generationConfig.model).apiFormat),
             );
+            const generationContext = hydratedGenerationContext;
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
@@ -2458,7 +2468,7 @@ function InfiniteCanvasPage() {
                                     : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
+                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, url: image.url, urlExpiresAt: image.urlExpiresAt, mediaSource: image.mediaSource, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
                                 setNodes((prev) =>
                                     prev.map((node) => {
                                         if (node.id !== rootId) return node;
@@ -2473,6 +2483,9 @@ function InfiniteCanvasPage() {
                                                 ...node.metadata,
                                                 content: item.content,
                                                 storageKey: item.storageKey,
+                                                url: item.url,
+                                                urlExpiresAt: item.urlExpiresAt,
+                                                arkAssetSource: item.arkAssetSource, mediaSource: item.mediaSource,
                                                 naturalWidth: item.naturalWidth,
                                                 naturalHeight: item.naturalHeight,
                                                 bytes: item.bytes,
@@ -2767,7 +2780,8 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""), node.type === CanvasNodeType.Video && resolveModelRequestConfig(generationConfig, generationConfig.model).apiFormat === "ark");
+            const hydratedContext = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""), node.type === CanvasNodeType.Video && ["ark", "kexiang"].includes(resolveModelRequestConfig(generationConfig, generationConfig.model).apiFormat));
+            const context = hydratedContext;
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt && !(node.type === CanvasNodeType.Video && (context?.referenceImages.length || context?.referenceVideos.length || context?.referenceAudios.length))) {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
@@ -2830,6 +2844,9 @@ function InfiniteCanvasPage() {
                     id: imageId || node.metadata?.primaryImageId || nanoid(),
                     status: NODE_STATUS_SUCCESS,
                     content: uploadedImage.url,
+                    url: image.url,
+                    urlExpiresAt: image.urlExpiresAt,
+                    mediaSource: image.mediaSource,
                     storageKey: uploadedImage.storageKey,
                     naturalWidth: uploadedImage.width,
                     naturalHeight: uploadedImage.height,
@@ -2859,7 +2876,7 @@ function InfiniteCanvasPage() {
                             ...(makePrimary ? { width: imageSize.width, height: imageSize.height, ...(imageId ? { position: { x: item.position.x + item.width / 2 - imageSize.width / 2, y: item.position.y + item.height / 2 - imageSize.height / 2 } } : {}) } : {}),
                             metadata: {
                                 ...item.metadata,
-                                ...(makePrimary ? imageMetadata(uploadedImage) : { status: NODE_STATUS_SUCCESS }),
+                                ...(makePrimary ? imageMetadata(uploadedImage, image) : { status: NODE_STATUS_SUCCESS }),
                                 images: item.metadata?.images?.map((current) => (current.id === retryImage.id ? retryImage : current)),
                                 primaryImageId: makePrimary ? retryImage.id : item.metadata?.primaryImageId,
                                 prompt,
@@ -2962,7 +2979,7 @@ function InfiniteCanvasPage() {
                 position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
                 width: config.width,
                 height: config.height,
-                metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }), prompt: image.prompt },
+                metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }, image), prompt: image.prompt },
             };
 
             setNodes((prev) => [...prev, node]);
@@ -3006,12 +3023,12 @@ function InfiniteCanvasPage() {
                         position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 },
                         width: nextSize.width,
                         height: nextSize.height,
-                        metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height },
+                        metadata: { content: payload.url, videoReferenceUrl: payload.referenceUrl, mediaSource: payload.mediaSource, durationMs: payload.durationMs, mimeType: payload.mimeType, bytes: payload.bytes, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height },
                     },
                 ]);
                 setSelectedNodeIds(new Set([id]));
             } else {
-                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey });
+                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, url: payload.url, urlExpiresAt: payload.urlExpiresAt, arkAssetSource: payload.arkAssetSource, mediaSource: payload.mediaSource, storageKey: payload.storageKey });
             }
             setAssetPickerOpen(false);
         },

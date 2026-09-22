@@ -5,6 +5,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { MediaAssetButton } from "@/components/media-asset-button";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
@@ -171,7 +172,7 @@ export default function ImagePage() {
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
         const stored = await uploadImage(image.dataUrl);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, url: image.url, urlExpiresAt: image.urlExpiresAt, arkAssetSource: image.storageKey || image.url || image.dataUrl, storageKey: stored.storageKey, mediaSource: image.mediaSource || (image.storageKey ? { id: image.storageKey, origin: "upload" } : undefined) }]);
         message.success(t("imageWorkbench.addedReference"));
     };
 
@@ -183,7 +184,7 @@ export default function ImagePage() {
             coverUrl: stored.url,
             tags: [],
             source: t("imageWorkbench.source"),
-            data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
+            data: { dataUrl: stored.url, url: image.url, urlExpiresAt: image.urlExpiresAt, arkAssetSource: image.storageKey || image.url || image.dataUrl, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType, mediaSource: image.mediaSource || (image.storageKey ? { id: image.storageKey, origin: "upload" } : undefined) },
             metadata: { source: "image-page", prompt },
         });
         message.success(t("common.addedToAssets"));
@@ -194,7 +195,7 @@ export default function ImagePage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, url: payload.url, urlExpiresAt: payload.urlExpiresAt, arkAssetSource: payload.arkAssetSource || payload.storageKey || payload.url || payload.dataUrl, storageKey: stored.storageKey, mediaSource: payload.mediaSource || (payload.storageKey ? { id: payload.storageKey, origin: "upload" } : undefined) }]);
         } else {
             message.warning(t("imageWorkbench.unsupportedAsset"));
         }
@@ -512,6 +513,7 @@ function ResultImageCard({
                         </Button>
                     </Tooltip>
                 </div>
+                <MediaAssetButton image={image} name={`生成图片 ${index + 1}`} />
             </div>
         </div>
     );

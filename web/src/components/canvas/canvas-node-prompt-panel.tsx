@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, Maximize2, Square } from "lucide-react";
-import { Button, Input, Modal, Tooltip } from "antd";
+import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, resolveModelForCapability, resolveModelRequestConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, resolveModelRequestConfig, resolveModelScript, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { isKexiangSeedanceModel, validateKexiangVideoMode } from "@/lib/kexiang-models";
 import { validateArkVideoSettings } from "@/lib/video-model-config";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -15,8 +16,9 @@ import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
-import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { getGroupResourceNodes, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
+import { MediaAssetButton } from "@/components/media-asset-button";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
@@ -48,9 +50,14 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const [prompt, setPrompt] = useState(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
     const [expanded, setExpanded] = useState(false);
-    const arkVideo = mode === "video" && resolveModelRequestConfig(config, config.model).apiFormat === "ark";
-    const canSubmit = Boolean(prompt.trim() || (arkVideo && connectedNodes.some((item) => item.metadata?.content || item.metadata?.videoReferenceUrl)));
-    const videoSettingsError = mode === "video" ? validateArkVideoSettings(config) : "";
+    const requestConfig = resolveModelRequestConfig(config, config.model);
+    const arkVideo = mode === "video" && requestConfig.apiFormat === "ark";
+    const kexiangVideo = mode === "video" && requestConfig.apiFormat === "kexiang" && !resolveModelScript(config, config.model);
+    const auditEnabled = kexiangVideo && isKexiangSeedanceModel(requestConfig.model);
+    const referenceNodes = connectedNodes.flatMap((item) => item.type === CanvasNodeType.Group ? getGroupResourceNodes(item.id, nodes) : [item]);
+    const canSubmit = Boolean(prompt.trim() || ((arkVideo || kexiangVideo) && referenceNodes.some((item) => item.metadata?.content || item.metadata?.videoReferenceUrl)));
+    const videoSettingsError = kexiangVideo ? validateKexiangVideoMode(requestConfig.model, config.videoMode) : mode === "video" ? validateArkVideoSettings(config) : "";
+    const renderImageAudit = (auditEnabled || (arkVideo && !resolveModelScript(config, config.model))) ? (imageNode: CanvasNodeData) => <MediaAssetButton image={{ ...imageNode.metadata, dataUrl: imageNode.metadata?.content }} name={imageNode.title} config={config} /> : undefined;
 
     // Restore prompts only when switching nodes; preserve the current input after generation on the same node.
     useEffect(() => {
@@ -83,11 +90,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} />
-            {node.type === CanvasNodeType.Video && <label className="mb-2 block text-xs" style={{ color: theme.node.muted }}>
-                Ark 参考视频来源（供其他节点引用）
-                <Input className="mt-1" value={node.metadata?.videoReferenceUrl || ""} placeholder="公网 HTTP(S) / asset://；不影响本地播放" onChange={(event) => onConfigChange(node.id, { videoReferenceUrl: event.target.value.trim() })} />
-            </label>}
+            <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} renderImageAction={renderImageAudit} />
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
@@ -156,7 +159,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
             </div>
             <Modal title={t("canvas.promptPanel.editorTitle")} open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
                 <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
-                    <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={(nodeId) => { setExpanded(false); onStartReferenceSelection?.(nodeId); }} />
+                    <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={(nodeId) => { setExpanded(false); onStartReferenceSelection?.(nodeId); }} renderImageAction={renderImageAudit} />
                     <CanvasPromptChipInput
                         value={prompt}
                         references={mentionReferences}

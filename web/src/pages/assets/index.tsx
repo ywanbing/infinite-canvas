@@ -5,6 +5,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { MediaAssetButton } from "@/components/media-asset-button";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -454,7 +455,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                     </div>
                 </div>
             </button>
-            <div className="flex items-center gap-2 px-4 pb-4">
+            <div className="flex flex-wrap items-center gap-2 px-4 pb-4">
                 <Button size="small" onClick={onOpen}>
                     {t("common.view")}
                 </Button>
@@ -476,6 +477,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>
                     {t("common.delete")}
                 </Button>
+                {asset.kind !== "text" && <MediaAssetButton image={asset.data} name={asset.title} kind={asset.kind} compact />}
             </div>
         </Card>
     );

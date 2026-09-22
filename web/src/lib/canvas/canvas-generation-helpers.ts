@@ -172,7 +172,11 @@ export function sourceNodeReferenceImages(node: CanvasNodeData | null) {
             name: `${node.title || node.id}.png`,
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
+            url: node.metadata.url,
+            urlExpiresAt: node.metadata.urlExpiresAt,
+            arkAssetSource: node.metadata.arkAssetSource,
             storageKey: node.metadata.storageKey,
+            mediaSource: node.metadata.mediaSource,
         },
     ];
 }

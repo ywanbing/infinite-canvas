@@ -1,6 +1,6 @@
 import { FileText, Image as ImageIcon, Music2, Plus, Puzzle, Video, X } from "lucide-react";
 import { Popover } from "antd";
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -10,7 +10,7 @@ import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
-export function CanvasNodeReferenceBar({ nodeId, nodes, connectedNodes, onDisconnect, onStartSelection }: { nodeId: string; nodes: CanvasNodeData[]; connectedNodes: CanvasNodeData[]; onDisconnect?: (fromNodeId: string, toNodeId: string) => void; onStartSelection?: (nodeId: string) => void }) {
+export function CanvasNodeReferenceBar({ nodeId, nodes, connectedNodes, onDisconnect, onStartSelection, renderImageAction }: { nodeId: string; nodes: CanvasNodeData[]; connectedNodes: CanvasNodeData[]; onDisconnect?: (fromNodeId: string, toNodeId: string) => void; onStartSelection?: (nodeId: string) => void; renderImageAction?: (node: CanvasNodeData) => ReactNode }) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const references = connectedNodes.flatMap((sourceNode) => (sourceNode.type === CanvasNodeType.Group ? getGroupResourceNodes(sourceNode.id, nodes) : [sourceNode]).map((node) => ({ node, sourceNodeId: sourceNode.id })));
@@ -18,7 +18,7 @@ export function CanvasNodeReferenceBar({ nodeId, nodes, connectedNodes, onDiscon
         <div className="mb-2">
             <div className="mb-1.5 text-[11px] font-medium" style={{ color: theme.node.muted }}>{t("canvas.references.title")}</div>
             <div className="thin-scrollbar flex min-h-12 gap-2 overflow-x-auto pb-1">
-                {references.map(({ node, sourceNodeId }) => <ReferenceItem key={`${sourceNodeId}:${node.id}`} node={node} onRemove={() => onDisconnect?.(sourceNodeId, nodeId)} />)}
+                {references.map(({ node, sourceNodeId }) => <div key={`${sourceNodeId}:${node.id}`} className="shrink-0"><ReferenceItem node={node} onRemove={() => onDisconnect?.(sourceNodeId, nodeId)} />{node.type === CanvasNodeType.Image && node.metadata?.content && renderImageAction?.(node)}</div>)}
                 <button type="button" className="grid size-12 shrink-0 place-items-center rounded-xl border bg-transparent transition hover:opacity-70" style={{ borderColor: theme.toolbar.border, color: theme.node.muted }} title={t("canvas.references.select")} onClick={() => onStartSelection?.(nodeId)}>
                     <Plus className="size-4" />
                 </button>
